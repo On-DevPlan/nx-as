@@ -2,6 +2,12 @@
 // pi 的 import 是重操作（首次加载模型目录），放模块级懒加载
 import { join } from 'node:path';
 
+// 把 pi 的 agent dir 隔离到 nx-as 自己的目录（pi-cwd 外）
+// 让 pi 找 ~/.nx-as/pi-agent/{extensions,skills,AGENTS.md,auth.json,models.json}
+// 受 PI_CODING_AGENT_DIR 环境变量控制——在进程启动时设一次即可
+import { PI_AGENT_DIR } from '../../core/paths.js';
+process.env.PI_CODING_AGENT_DIR = process.env.PI_CODING_AGENT_DIR || PI_AGENT_DIR;
+
 let piModule = null;
 async function pi() {
   if (!piModule) {

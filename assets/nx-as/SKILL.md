@@ -40,6 +40,7 @@ pi 内核的 agent 服务：`serve` 驱动 Web 面板 + HTTP API；CLI 与 API �
 |---|---|
 | 提交任务、消费事件流/结果、App 对接 API | [references/01-tasks.md](01-tasks.md) |
 | 写提示词模板（变量、frontmatter、多步任务） | [references/02-prompts.md](02-prompts.md) |
+| 装 pi 扩展/技能、补记忆/权限/通知 | [references/03-extensions.md](03-extensions.md) |
 | 改代码、加功能域、理解分层 | [references/00-design.md](00-design.md) |
 
 ## 什么时候不用

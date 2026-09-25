@@ -46,6 +46,7 @@ const actions = [
       'base-url': { type: 'string', required: true },
       'api-key-env': { type: 'string' },
       models: { type: 'array' },
+      api: { type: 'string', enum: ['openai-completions', 'anthropic-messages'] },
     },
     args: ['provider'],
     run: (ctx) =>
@@ -54,8 +55,9 @@ const actions = [
         baseUrl: ctx['base-url'],
         apiKeyEnv: ctx['api-key-env'] || '',
         models: ctx.models || [],
+        api: ctx.api || 'openai-completions',
       }),
-    render: (r) => `已写入端点: ${r.provider} → ${r.file}`,
+    render: (r) => `已写入端点: ${r.provider}（api=${r.api}） → ${r.file}`,
   },
   {
     id: 'models.remove-endpoint',

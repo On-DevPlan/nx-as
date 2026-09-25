@@ -53,7 +53,7 @@ export async function customEndpoints() {
   }
 }
 
-export async function setCustomEndpoint({ provider, baseUrl, apiKeyEnv = '', models = [] }) {
+export async function setCustomEndpoint({ provider, baseUrl, apiKeyEnv = '', models = [], api = 'openai-completions' }) {
   if (!provider || !baseUrl) {
     const err = new Error('缺少 provider 或 baseUrl');
     err.code = 'INVALID_INPUT';
@@ -62,13 +62,13 @@ export async function setCustomEndpoint({ provider, baseUrl, apiKeyEnv = '', mod
   await fsp.mkdir(PI_AGENT_DIR, { recursive: true });
   const data = { providers: await customEndpoints() };
   data.providers[provider] = {
-    type: 'openai-completions',
     baseUrl,
+    api,
     apiKey: apiKeyEnv ? `$${apiKeyEnv}` : 'dummy-key',
-    ...(models.length ? { models: Object.fromEntries(models.map((m) => [m, { id: m }])) } : {}),
+    ...(models.length ? { models: models.map((m) => (typeof m === 'string' ? { id: m } : m)) } : {}),
   };
   await fsp.writeFile(await modelsJsonPath(), JSON.stringify(data, null, 2), 'utf8');
-  return { status: 'ok', provider, file: await modelsJsonPath() };
+  return { status: 'ok', provider, file: await modelsJsonPath(), api };
 }
 
 export async function removeCustomEndpoint({ provider }) {
