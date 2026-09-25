@@ -74,7 +74,7 @@ export default function PluginsView() {
       </Row>
       <Row label="安装">
         <Btn onClick={async () => {
-          const src = prompt('输入本地路径（含 SKILL.md 的目录）');
+          const src = prompt('输入本地路径（含 SKILL.md 或扩展 .ts 的目录；nx-as 扩展示例：assets/extensions/）');
           if (!src) return;
           try { await api('POST', '/api/plugins/install', { source: src }); await refresh(); }
           catch (e) { setErr(e.message); }

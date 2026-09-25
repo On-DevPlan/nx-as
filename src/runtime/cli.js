@@ -25,6 +25,10 @@ async function cmdServe(ctx) {
   console.log(`控制台: http://${displayHost}:${port}/?token=${token}   (带密钥直达，手机可收藏)`);
   console.log(`密钥:   ${token}`);
   console.log(`(App/外部走 API 必须带 Authorization: Bearer <密钥>；/api/auth/verify 免密钥)`);
+  // Bearer-auth 提示（nx-as 自带扩展会自动接管）
+  if (process.env.NXAS_BEARER_TOKEN) {
+    console.log(`Bearer: 走 nx-as 自带扩展 (provider=${process.env.NXAS_BEARER_PROVIDER || 'MiniMax'}, models=${process.env.NXAS_BEARER_MODELS || 'MiniMax-M3'})`);
+  }
   if (!ctx['no-open'] && host !== '0.0.0.0') openBrowser(`http://127.0.0.1:${port}`);
 
   const shutdown = () => {
