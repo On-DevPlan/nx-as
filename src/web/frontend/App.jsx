@@ -2,6 +2,7 @@ import React, { Suspense, lazy, useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { VIEWS } from './registry.js';
 import { api, setUnauthorizedHandler, getToken } from './api/client.js';
+import { Card, Row } from './components/ui.jsx';
 
 // 懒加载视图
 const LAZY = Object.fromEntries(Object.entries(VIEWS).map(([id, load]) => [id, lazy(load)]));
@@ -56,7 +57,14 @@ function TokenGate({ children }) {
   };
 
   useEffect(() => {
-    check(getToken());
+    // URL 带密钥（serve 启动打印的控制台链接 / 密钥短信发给自己）：优先并清掉参数
+    const url = new URL(location.href);
+    const urlToken = url.searchParams.get('token');
+    if (urlToken) {
+      url.searchParams.delete('token');
+      history.replaceState(null, '', url.pathname + url.search + url.hash);
+    }
+    check(urlToken || getToken());
   }, []);
 
   if (ok === null) return <div className="card">连接中...</div>;

@@ -22,6 +22,7 @@ async function cmdServe(ctx) {
 
   const displayHost = host === '0.0.0.0' ? '0.0.0.0' : host;
   console.log(`面板:   http://${displayHost}:${port}`);
+  console.log(`控制台: http://${displayHost}:${port}/?token=${token}   (带密钥直达，手机可收藏)`);
   console.log(`密钥:   ${token}`);
   console.log(`(App/外部走 API 必须带 Authorization: Bearer <密钥>；/api/auth/verify 免密钥)`);
   if (!ctx['no-open'] && host !== '0.0.0.0') openBrowser(`http://127.0.0.1:${port}`);
