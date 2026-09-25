@@ -1,38 +1,78 @@
 // pi 会话生命周期管理：并发限制、事件总线、SSE 订阅者
 // pi 的 import 是重操作（首次加载模型目录），放模块级懒加载
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 
-// 把 pi 的 agent dir 隔离到 nx-as 自己的目录（pi-cwd 外）
+// pi 的 agent dir 隔离到 nx-as 自己的目录（pi-cwd 外）
 // 让 pi 找 ~/.nx-as/pi-agent/{extensions,skills,AGENTS.md,auth.json,models.json}
 // 受 PI_CODING_AGENT_DIR 环境变量控制——在进程启动时设一次即可
 import { PI_AGENT_DIR } from '../../core/paths.js';
 process.env.PI_CODING_AGENT_DIR = process.env.PI_CODING_AGENT_DIR || PI_AGENT_DIR;
 
-// 注意：不要把 NXAS_BEARER_TOKEN export 成 ANTHROPIC_API_KEY 或 ANTHROPIC_AUTH_TOKEN，
+// 注意：不要把 bearer token export 成 ANTHROPIC_API_KEY 或 ANTHROPIC_AUTH_TOKEN，
 // 否则 pi 内置 anthropic provider 会走 x-api-key 或 OAuth 路径，
 // 而 MiniMax 这种 Anthropic 兼容代理只接受干净的 Authorization: Bearer
-// （我们的 nx-as 自带 Bearer 扩展已经通过 authHeader:true 注入 Bearer 头）
+// （nx-as 自带 Bearer 扩展通过 authHeader:true 注入 Bearer 头）
 
-// 首次启动时把 nx-as 自带的 extensions 复制到 pi agent dir，让 pi 自动发现
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const BUNDLED_EXT_DIR = join(__dirname, '..', '..', '..', 'assets', 'extensions');
-async function syncBundledExtensions() {
+// 从 store.settings 读 Bearer 配置（面板/CLI 可配），环境变量兜底；
+// 直接把 token 写进生成的扩展文件（apiKey 字面量），避免依赖进程环境变量
+export async function bearerConfig() {
+  const { getRawSettings } = await import('../settings/service.js');
+  const st = await getRawSettings();
+  return {
+    provider: st.bearerProvider || process.env.NXAS_BEARER_PROVIDER || 'MiniMax',
+    baseUrl: st.bearerBaseUrl || process.env.NXAS_BEARER_BASE_URL || '',
+    models: (st.bearerModels || process.env.NXAS_BEARER_MODELS || '').split(',').map((x) => x.trim()).filter(Boolean),
+    token: st.bearerToken || process.env.NXAS_BEARER_TOKEN || '',
+  };
+}
+
+// 从 store 的 bearer 配置**生成**扩展文件（token 内联，不依赖进程环境变量）。
+// 每次启动重写——配置改了重启即生效；返回是否写入了有效配置。
+export async function writeBearerExtension() {
   const fsp = (await import('node:fs/promises')).default;
-  let bundled;
-  try { bundled = await fsp.readdir(BUNDLED_EXT_DIR); } catch { return; }
+  const cfg = await bearerConfig();
   const target = join(PI_AGENT_DIR, 'extensions');
   await fsp.mkdir(target, { recursive: true });
-  for (const f of bundled.filter((x) => x.endsWith('.ts') || x.endsWith('.js'))) {
-    const src = join(BUNDLED_EXT_DIR, f);
-    const dst = join(target, f);
-    // 已存在不覆盖（用户可能改过）
-    try { await fsp.stat(dst); continue; } catch { /* 不存在则复制 */ }
-    await fsp.cp(src, dst);
+  const file = join(target, 'nx-as-bearer-anthropic.ts');
+  const meta = join(target, 'nx-as-bearer-anthropic.json');
+
+  if (!cfg.token || !cfg.baseUrl || !cfg.models.length) {
+    // 配置不完整 → 删除生成物（避免用到过期的 token）
+    await fsp.rm(file, { force: true });
+    await fsp.rm(meta, { force: true });
+    return { active: false, config: cfg };
   }
+
+  const json = JSON.stringify({ provider: cfg.provider, baseUrl: cfg.baseUrl, models: cfg.models });
+  const src = `// 本文件由 nx-as 自动生成（每次 serve 重写）——改配置请用：
+//   nx-as settings set --bearer-base-url ... --bearer-token ... --bearer-models ...
+// 或面板「设置」页 / PATCH /api/settings
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+const CFG = ${json};
+const TOKEN = ${JSON.stringify(cfg.token)};
+export default function (pi: ExtensionAPI) {
+  if (!TOKEN) return;
+  const models = CFG.models.map((id: string) => ({
+    id, name: id, reasoning: false, input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200000, maxTokens: 8192,
+  }));
+  pi.registerProvider(CFG.provider, {
+    baseUrl: CFG.baseUrl,
+    apiKey: TOKEN,
+    api: "anthropic-messages",
+    authHeader: true,
+    models,
+  });
 }
-// 同步执行一次（fire-and-forget 不阻塞 import，但调用方可能不等）
-syncBundledExtensions().catch((e) => console.error('[nx-as] 同步扩展失败:', e.message));
+`;
+  await fsp.writeFile(file, src, 'utf8');
+  await fsp.writeFile(meta, JSON.stringify({ provider: cfg.provider, baseUrl: cfg.baseUrl, models: cfg.models }, null, 2), 'utf8');
+  return { active: true, config: cfg };
+}
+
+// 同步执行一次（fire-and-forget 不阻塞 import）
+writeBearerExtension().catch((e) => console.error('[nx-as] 生成 Bearer 扩展失败:', e.message));
 
 let piModule = null;
 async function pi() {
@@ -207,6 +247,9 @@ async function runOne(taskId) {
     const workspace = taskWorkspace(taskId);
     const fsp = (await import('node:fs/promises')).default;
     await fsp.mkdir(workspace, { recursive: true });
+
+    // 每次跑任务前按当前 store 配置重生成 Bearer 扩展（改配置后下一个任务即生效）
+    await writeBearerExtension().catch(() => {});
 
     // pi 的会话/auth/models 全部隔离在 nx-as 自己的目录（不碰用户的 ~/.pi/agent）
     const { PI_AGENT_DIR } = await import('../../core/paths.js');

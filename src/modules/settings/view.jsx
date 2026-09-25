@@ -22,12 +22,29 @@ export default function SettingsView() {
     setErr('');
     setSaved(false);
     try {
-      await api('PATCH', '/api/settings', {
+      const patch = {
         maxConcurrent: Number(s.maxConcurrent),
         autoRun: Boolean(s.autoRun),
-      });
+        bearerProvider: s.bearerProvider,
+        bearerBaseUrl: s.bearerBaseUrl,
+        bearerModels: s.bearerModels,
+      };
+      // 只有用户真改了 token 才提交（展示的是掩码）
+      if (s.bearerTokenInput) patch.bearerToken = s.bearerTokenInput;
+      await api('PATCH', '/api/settings', patch);
       setSaved(true);
+      setS({ ...s, bearerTokenInput: '' });
       setTimeout(() => setSaved(false), 2000);
+      await refresh();
+    } catch (e) {
+      setErr(e.message);
+    }
+  };
+
+  const clearToken = async () => {
+    if (!confirm('清除已保存的 Bearer token？（代理模型将不可用）')) return;
+    try {
+      await api('PATCH', '/api/settings', { bearerToken: '' });
       await refresh();
     } catch (e) {
       setErr(e.message);
@@ -50,6 +67,30 @@ export default function SettingsView() {
         {saved && <span className="tag strong">已保存</span>}
       </Row>
       {err && <Row label="错误"><span className="bad">{err}</span></Row>}
+
+      <div className="colhead">Anthropic 兼容代理（MiniMax 等）</div>
+      <Row label="provider">
+        <Input value={s.bearerProvider} onChange={(v) => setS({ ...s, bearerProvider: v })} placeholder="MiniMax" />
+      </Row>
+      <Row label="baseUrl">
+        <Input value={s.bearerBaseUrl} onChange={(v) => setS({ ...s, bearerBaseUrl: v })} placeholder="https://api.minimaxi.com/anthropic" />
+      </Row>
+      <Row label="模型列表">
+        <Input value={s.bearerModels} onChange={(v) => setS({ ...s, bearerModels: v })} placeholder="逗号分隔，如 MiniMax-M3" />
+      </Row>
+      <Row label="token">
+        <Input
+          value={s.bearerTokenInput ?? ''}
+          onChange={(v) => setS({ ...s, bearerTokenInput: v })}
+          placeholder={s.hasBearerToken ? `已保存: ${s.bearerToken}（留空则不改）` : 'sk-cp-...'}
+        />
+        {s.hasBearerToken && <button className="linkbtn" onClick={clearToken}>清除</button>}
+      </Row>
+      <Row label="">
+        <span className="mid">
+          配置保存后立即生效（nx-as 会重新生成 pi 扩展）。任务里用 <code>model: "{s.bearerProvider || 'MiniMax'}/模型ID"</code>
+        </span>
+      </Row>
     </Card>
   );
 }

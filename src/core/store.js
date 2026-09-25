@@ -13,6 +13,12 @@ const EMPTY = () => ({
     model: '',              // 默认模型，空 = pi 自己的默认
     maxConcurrent: 2,       // 同时跑的任务数
     autoRun: true,          // task add 后自动执行
+    // Anthropic 兼容代理（MiniMax 等）的 Bearer 配置；
+    // 留空则回落到环境变量 NXAS_BEARER_*
+    bearerProvider: 'MiniMax',
+    bearerBaseUrl: '',
+    bearerModels: '',       // 逗号分隔
+    bearerToken: '',        // 明文落盘（与 auth.token 同级信任边界）
   },
   auth: {
     token: '',              // 空表示未设置；serve 启动时若无 token 则生成
