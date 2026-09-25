@@ -8,6 +8,7 @@ export const MODULES = [
   { id: 'models', view: true },
   { id: 'settings', view: true },
   { id: 'system', view: false },
+  { id: 'plugins', view: true },
 ];
 
 // 装载期自检：重复 id / 缺 cli / 缺 run / 路由重复 —— 启动瞬间失败

@@ -48,7 +48,7 @@ export default defineConfig([
     files: ['src/modules/**/*.js'],
     rules: {
       'no-restricted-imports': ['error', { patterns: [
-        { group: ['../auth/*', '../tasks/*', '../prompts/*', '../models/*', '../system/*'],
+        { group: ['../auth/*', '../tasks/*', '../prompts/*', '../models/*', '../system/*', '../plugins/*'],
           message: '模块之间不得互相依赖；共享逻辑下沉 core/。唯一例外：../settings/service.js。' },
       ] } ],
     },

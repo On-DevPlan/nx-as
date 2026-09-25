@@ -7,4 +7,5 @@ export const VIEWS = {
   prompts: () => import('../../modules/prompts/view.jsx'),
   models: () => import('../../modules/models/view.jsx'),
   settings: () => import('../../modules/settings/view.jsx'),
+  plugins: () => import('../../modules/plugins/view.jsx'),
 };

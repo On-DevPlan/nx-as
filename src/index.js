@@ -7,7 +7,8 @@ export { default as prompts } from './modules/prompts/index.js';
 export { default as models } from './modules/models/index.js';
 export { default as settings } from './modules/settings/index.js';
 export { default as system } from './modules/system/index.js';
+export { default as plugins } from './modules/plugins/index.js';
 
-import { auth, tasks, prompts, models, settings, system } from './modules/index.js';
+import { auth, tasks, prompts, models, settings, system, plugins } from './modules/index.js';
 
-export const ACTIONS = [...auth.actions, ...tasks.actions, ...prompts.actions, ...models.actions, ...settings.actions, ...system.actions];
+export const ACTIONS = [...auth.actions, ...tasks.actions, ...prompts.actions, ...models.actions, ...settings.actions, ...system.actions, ...plugins.actions];

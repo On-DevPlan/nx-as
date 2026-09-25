@@ -95,7 +95,8 @@ test('视图里调用的每个 /api 路径都有对应路由', () => {
   const calls = new Set();
   for (const m of MODULES.filter((m) => m.view)) {
     const src = readFileSync(join(ROOT, 'src', 'modules', m.id, 'view.jsx'), 'utf8');
-    for (const match of src.matchAll(/api\(\s*['"](GET|POST|PATCH|DELETE)['"]\s*,\s*([`'"])([^`'"]+)\2/g)) {
+    // api('METHOD', '/api/path') 或 `...${name}...`，全部包括，max 200 字符止于分隔符
+    for (const match of src.matchAll(/api\(\s*['"]([A-Z]+)['"]\s*,\s*([`'"])(\/api[^`'"]*?)\2/g)) {
       calls.add(`${match[1]} ${match[3]}`);
     }
   }
@@ -104,9 +105,10 @@ test('视图里调用的每个 /api 路径都有对应路由', () => {
     calls.add(`GET ${match[2]}`);
   }
 
-  // 模板字面量归一成 :param（${editing.name} → :name）
+  // 模板字面量归一成 :param（${editing.name} → :param），query 串剥掉
   function normalize(methodPath) {
-    const [method, path] = methodPath.split(' ');
+    const [method, pathRaw] = methodPath.split(' ');
+    const path = pathRaw.split('?')[0];
     const norm = path
       .replace(/\$\{[^}]+\}/g, ':param')
       .split('/')
@@ -114,6 +116,7 @@ test('视图里调用的每个 /api 路径都有对应路由', () => {
       .join('/');
     return { method, norm };
   }
+
   function routeToPattern(httpPath) {
     return httpPath
       .split('/')
