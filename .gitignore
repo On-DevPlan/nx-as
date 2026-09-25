@@ -4,11 +4,22 @@
 # ============================================================
 .claude/repo/*
 
+!.claude/repo/_read/
+!.claude/repo/_read/**
+
 !.claude/repo/_self/
 !.claude/repo/_self/**
 
-# git remote 提取脚本的运行产物（sl-git-standard）
-.claude/www/
+# git.remote 清单：团队共享状态，入库（别人 clone 本仓库后 sync 即可重建 .claude/repo）
+!.claude/www/
 
 # Tool artifacts / scratch tools (本地工具产物，不入库)
 .tool/
+
+# ============================================================
+# Node / build
+# ============================================================
+node_modules/
+src/web/public/
+*.log
+.DS_Store

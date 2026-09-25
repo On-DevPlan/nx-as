@@ -1,0 +1,55 @@
+{
+  "name": "nx-as",
+  "version": "0.1.0",
+  "description": "Personal AI agent server powered by pi — CLI + Web panel + token-authenticated API for phone apps",
+  "type": "module",
+  "bin": {
+    "nx-as": "bin/nx-as.mjs"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "assets/",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@9.12.0",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:serve": "node bin/nx-as.mjs serve --no-open",
+    "build": "vite build",
+    "start": "pnpm run build && node bin/nx-as.mjs serve",
+    "test": "pnpm run lint && pnpm run build && node tests/smoke.mjs && node --test tests/unit/*.test.mjs",
+    "lint": "eslint src tests scripts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/On-DevPlan/nx-as.git"
+  },
+  "homepage": "https://github.com/On-DevPlan/nx-as#readme",
+  "bugs": {
+    "url": "https://github.com/On-DevPlan/nx-as/issues"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "pi",
+    "personal-server",
+    "cli",
+    "sse"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.87.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "eslint": "^9.17.0",
+    "vite": "^6.0.7"
+  }
+}
