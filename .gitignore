@@ -1,0 +1,14 @@
+# ============================================================
+# Cloned repositories (nested git repos) — sl-git-standard
+# 父目录必须用 /* 半透明模式，否则否定规则失效
+# ============================================================
+.claude/repo/*
+
+!.claude/repo/_self/
+!.claude/repo/_self/**
+
+# git remote 提取脚本的运行产物（sl-git-standard）
+.claude/www/
+
+# Tool artifacts / scratch tools (本地工具产物，不入库)
+.tool/
