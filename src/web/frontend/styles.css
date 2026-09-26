@@ -38,7 +38,8 @@ header {
   padding: 0 12px;
   border-bottom: 1px solid var(--border);
 }
-.brand { font-weight: 600; font-size: 13px; }
+.brand { font-weight: 600; font-size: 13px; display: inline-flex; align-items: center; gap: 7px; }
+.brand img { width: 20px; height: 20px; border-radius: 5px; display: block; }
 nav { display: flex; gap: 4px; }
 .tab {
   height: var(--btn-h);

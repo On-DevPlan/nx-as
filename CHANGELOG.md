@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.1 (2026-09-26)
+
+面板品牌化。
+
+- 新增 logo / favicon 全套（`src/web/frontend/public/`）：logo.png、logo-rounded.png、favicon-{16,32,48}.png、favicon.ico
+- 撞色：克莱因蓝 `#002EA6` 底 + 松花黄 `#FFE76F` 字母
+- header 品牌区带图，index.html 挂 favicon / apple-touch-icon
+
 ## 0.1.0 (2026-09-26)
 
 首个版本。

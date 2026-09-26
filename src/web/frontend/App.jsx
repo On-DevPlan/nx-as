@@ -92,7 +92,7 @@ function App() {
   return (
     <TokenGate>
       <header>
-        <span className="brand">nx-as</span>
+        <span className="brand"><img src="/logo-rounded.png" alt="" />nx-as</span>
         <nav>
           {tabs.map((t) => (
             <button key={t} className={t === active ? 'tab active' : 'tab'} onClick={() => setActive(t)}>
