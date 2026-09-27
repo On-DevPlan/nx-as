@@ -45,6 +45,42 @@ async function cmdServe(ctx) {
   return new Promise(() => {}); // 常驻
 }
 
+// nx-as web：拉起 pi-web（@agegr/pi-web，MIT），PI_CODING_AGENT_DIR 指向 nx-as 的
+// 隔离目录 → 它的 89 组件生产级 UI（Markdown/KaTeX/Mermaid/diff/会话树/文件浏览）直接可用。
+// pi-web 不在 dependencies 里（重依赖，Next.js 全家桶）；缺的时候给出一条安装命令。
+async function cmdWeb(ctx) {
+  const { PI_AGENT_DIR } = await import('../core/paths.js');
+  const { spawn } = await import('node:child_process');
+
+  let resolved;
+  try {
+    resolved = await import.meta.resolve('@agegr/pi-web/bin/pi-web.js');
+  } catch {
+    resolved = null;
+  }
+  if (!resolved) {
+    console.log('pi-web 未安装。安装后重试（一次性，约 200MB 依赖）：');
+    console.log('  npm install -g @agegr/pi-web');
+    console.log('或直接运行：');
+    console.log(`  PI_CODING_AGENT_DIR="${PI_AGENT_DIR.replace(/\\/g, '/')}" npx @agegr/pi-web`);
+    return { status: 'blocked', note: 'pi-web 未安装' };
+  }
+
+  const port = ctx.port ?? 30141;
+  const binPath = new URL(resolved).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  const child = spawn(process.execPath, [binPath, '--no-open', '--port', String(port)], {
+    stdio: 'inherit',
+    env: { ...process.env, PI_CODING_AGENT_DIR: PI_AGENT_DIR },
+  });
+  console.log(`pi-web: http://127.0.0.1:${port}  (读取 ${PI_AGENT_DIR} 的会话/密钥/模型配置)`);
+  if (!ctx['no-open']) {
+    const { openBrowser } = await import('../core/open.js');
+    openBrowser(`http://127.0.0.1:${port}`);
+  }
+  child.on('exit', (code) => process.exit(code ?? 0));
+  return new Promise(() => {}); // 常驻，随子进程退出
+}
+
 function allCommands() {
   return [...BUILTINS, ...ACTIONS];
 }
@@ -81,6 +117,17 @@ const BUILTINS = [
       'no-open': { type: 'boolean' },
     },
     run: (ctx) => cmdServe(ctx),
+    render: () => '',
+  },
+  {
+    id: 'web',
+    cli: ['web'],
+    summary: '用 pi-web（生产级对话 UI）浏览 nx-as 会话',
+    flags: {
+      port: { type: 'number', default: 30141 },
+      'no-open': { type: 'boolean' },
+    },
+    run: (ctx) => cmdWeb(ctx),
     render: () => '',
   },
   {

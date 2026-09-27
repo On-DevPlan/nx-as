@@ -335,10 +335,17 @@ async function runOne(taskId) {
 
     const { createAgentSession, SessionManager } = await pi();
 
+    // 会话文件落 sessions/<cwd 编码>/ 子目录（pi CLI 标准布局，见 pi session-manager.ts:
+    //   `--${cwd.replace(/^[/\\]/,'').replace(/[/\\:]/g,'-')}--` ）。
+    // 对齐后 pi-web / pi -r 等标准工具能直接发现 nx-as 任务的会话。
+    const cwdEncoded = `--${workspace.replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`;
+    const taskSessionsDir = join(sessionsDir, cwdEncoded);
+    await fsp.mkdir(taskSessionsDir, { recursive: true });
+
     const sessionOpts = {
       cwd: workspace,
       // 显式指定会话目录：JSONL 落在 nx-as 目录内，不依赖 PI_CODING_AGENT_DIR
-      sessionManager: SessionManager.create(workspace, sessionsDir),
+      sessionManager: SessionManager.create(workspace, taskSessionsDir),
     };
 
     // 模型选择：task.model 优先，为空则回落到 settings.model（面板「默认模型」）。

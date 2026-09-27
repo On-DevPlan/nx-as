@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.2 (2026-09-27)
+
+pi-web 集成：生产级对话 UI 一条命令可达。
+
+### Added
+
+- **`nx-as web` 命令**：拉起 [pi-web](https://github.com/agegr/pi-web)（@agegr/pi-web，MIT，89 组件 Next.js 生产级 UI——Markdown/KaTeX/Mermaid/代码高亮/diff 预览/会话树/文件浏览），`PI_CODING_AGENT_DIR` 自动指向 nx-as 的隔离目录。pi-web 未安装时给出安装/直跑提示。
+
+### Changed
+
+- **会话文件布局对齐 pi CLI 标准**：从 `sessions/<uuid>.jsonl` 移到 `sessions/--<cwd 编码>--/<uuid>.jsonl`（pi 的 session-manager 编码公式）。对齐后 pi-web、`pi -r` 等标准 pi 工具能直接发现并继续 nx-as 任务的会话。旧布局文件仍可被 pi CLI 通过 `-r` 全局模式找到。
+
 ## 0.2.1 (2026-09-27)
 
 调试面板补全：时序瀑布图 + 对话页强化（参考 pi-web 的成熟模式）。
