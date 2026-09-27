@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.2 (2026-09-26)
+
+Bug 修复。
+
+- runner：消费 `settings.model` 作为默认模型回退，并在 `settings.model` 为空时回落到已配 Bearer 代理的首个模型（修复不传 model 时静默落到 pi 默认 provider、请求被错误代理端点拒绝的 403 问题）
+- runner：模型未注册时抛出可读错误（列出本机已配置凭据的模型 + 用法串），替代裸 403
+- prompts：`renderPrompt` 改用函数式替换，避免用户输入含 `$&` / `` $` `` / `$'` 时被 String.replace 当作替换模式吞掉
+- cli：`VERSION` 字面量与 npm 版本同步（之前 0.1.1 仍报 0.1.0）
+- auth：`/api/auth/verify` 返回的 version 与 npm 版本同步
+
 ## 0.1.1 (2026-09-26)
 
 面板品牌化。

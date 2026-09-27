@@ -2,7 +2,7 @@ import { applySpec, cliPathsOf, usageOf } from './spec.js';
 import { CODES } from '../core/errors.js';
 import { ACTIONS } from '../index.js';
 
-export const VERSION = '0.1.0';
+export const VERSION = '0.1.2';
 export const MODULE_IDS = ['auth', 'tasks', 'prompts', 'models', 'settings', 'system', 'plugins'];
 
 // ---------- 平台命令（不属于任何业务域；与模块 action 合成同一张 ALL_COMMANDS） ----------

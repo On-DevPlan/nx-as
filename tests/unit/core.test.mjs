@@ -97,6 +97,30 @@ test('taskWorkspace 在 store 同级的 workspaces 下', () => {
   assert.ok(w.replace(/\\/g, '/').endsWith('workspaces/t_abc'), w);
 });
 
+test('runner.defaultModel：settings.model 优先，空则回落 Bearer 代理', async () => {
+  const { defaultModel } = await imp('src/modules/tasks/runner.js');
+
+  // 1) settings.model 有值 → 用它
+  await saveStore({ version: 1, settings: { model: 'MiniMax/MiniMax-M3' } });
+  resetStoreCache();
+  assert.equal(await defaultModel(), 'MiniMax/MiniMax-M3');
+
+  // 2) settings.model 空但配了 Bearer → 用 Bearer 的第一个模型。
+  //    不能返回空串：那样 pi 会按进程环境变量挑 provider，用户 shell 里若有
+  //    ANTHROPIC_BASE_URL（如跑 Claude Code 的终端）就会打错端点，得到难懂的 403。
+  await saveStore({
+    version: 1,
+    settings: { model: '', bearerProvider: 'MiniMax', bearerBaseUrl: 'https://example.test/anthropic', bearerModels: 'MiniMax-M3,MiniMax-M2' },
+  });
+  resetStoreCache();
+  assert.equal(await defaultModel(), 'MiniMax/MiniMax-M3', 'Bearer 已配 → 回落它的首个模型，不交给 pi 猜');
+
+  // 3) 都没配 → 空串（此时只能交给 pi 默认 provider）
+  await saveStore({ version: 1, settings: { model: '', bearerBaseUrl: '', bearerModels: '' } });
+  resetStoreCache();
+  assert.equal(await defaultModel(), '');
+});
+
 // ---------- prompts ----------
 const promptService = await imp('src/modules/prompts/service.js');
 
@@ -115,6 +139,25 @@ test('prompts: add/get/update/remove 与模板渲染', async () => {
   assert.equal(upd.content, 'hi ${input:-fallback}', 'PATCH 语义：没传 content 保持原值');
   await promptService.removePrompt(name);
   await assert.rejects(() => promptService.getPrompt(name), (e) => e.code === 'NOT_FOUND');
+});
+
+test('prompts: 输入含 $& / $1 不被当作替换模式展开', async () => {
+  const name = 'zz-unit-repl-' + Date.now().toString(36);
+  await promptService.addPrompt({ name, content: '处理 $input' });
+  // $& / $` / $' 在替换串里有特殊含义（$& = 整个匹配），曾经会把用户输入吞成 "$input"。
+  // 用户输入常含这类字符：shell 片段、sed 's/a/$&/'、正则断言。
+  assert.equal(await promptService.renderPrompt(name, '包含 $& 的输入'), '处理 包含 $& 的输入');
+  assert.equal(await promptService.renderPrompt(name, 'a$1b'), '处理 a$1b');
+  assert.equal(await promptService.renderPrompt(name, '价格 $100'), '处理 价格 $100');
+  assert.equal(await promptService.renderPrompt(name, "sed 's/a/\$&/'"), "处理 sed 's/a/\$&/'");
+
+  // 同一占位符出现多次 + 默认值语法混用，input 里的 $& 仍要原样保留
+  await promptService.updatePrompt({ name, content: 'A $input B ${input:-dflt} C $input' });
+  assert.equal(await promptService.renderPrompt(name, '$&'), 'A $& B $& C $&');
+  // 不传 input 时走默认值分支（默认值来自模板，同样不能被展开）
+  assert.equal(await promptService.renderPrompt(name, ''), 'A  B dflt C ');
+
+  await promptService.removePrompt(name);
 });
 
 test('prompts: 名称校验拒绝路径穿越', async () => {

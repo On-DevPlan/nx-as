@@ -15,9 +15,9 @@ const actions = [
     run: async (ctx) => {
       try {
         const expected = await ensureToken(null);
-        return { valid: ctx.token === expected, version: '0.1.0' };
+        return { valid: ctx.token === expected, version: '0.1.2' };
       } catch {
-        return { valid: false, version: '0.1.0' };
+        return { valid: false, version: '0.1.2' };
       }
     },
   },

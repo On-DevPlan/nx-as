@@ -209,6 +209,45 @@ async function pump() {
   }
 }
 
+// 默认模型：task.model 优先，其次 store.settings.model，最后回落到 Bearer 代理的第一个模型。
+//
+// 最后这条回落很重要：不指定任何模型时 pi 会按**进程环境变量**挑 provider。
+// 如果用户在自己的 shell 里（比如跑 Claude Code 的终端）export 了 ANTHROPIC_BASE_URL /
+// ANTHROPIC_API_KEY，pi 会挑中 anthropic 并带着那套凭据去打代理端点，结果是难懂的 403。
+// nx-as 既然配了 Bearer 代理，用户的本意就是用它。
+export async function defaultModel() {
+  const { loadStore } = await import('../../core/store.js');
+  const s = await loadStore();
+  const explicit = (s.settings.model || '').trim();
+  if (explicit) return explicit;
+  const cfg = await bearerConfig();
+  return cfg.models.length ? `${cfg.provider}/${cfg.models[0]}` : '';
+}
+
+// "Provider/ModelId" 字符串 → pi 的 Model 对象。
+// createAgentSession 不解析字符串：必须先建临时 session 触发扩展加载，
+// 从 modelRuntime 的目录里按 provider/id 找到 Model 对象再传。
+async function resolveModel(createAgentSession, sessionOpts, wanted) {
+  const tmp = await createAgentSession(sessionOpts);
+  try {
+    return tmp.session?.modelRuntime?.snapshot?.all?.find((m) => `${m.provider}/${m.id}` === wanted) || null;
+  } finally {
+    tmp.session?.dispose?.();
+  }
+}
+
+// 报错时列出可用模型。pi 的目录含 42 个 provider、近 1500 个内置模型，
+// 全列出来没人看得完。只列 nx-as 自己知道配了凭据的（Bearer 代理 + 已设的默认模型）——
+// 不去探测用户自己的 ~/.pi 凭据：那要把 42 个 provider 各起一次 pi auth 子进程，太慢。
+async function availableModelLines() {
+  const cfg = await bearerConfig();
+  const lines = [];
+  if (cfg.models.length) lines.push(`  ${cfg.provider}: ${cfg.models.join(', ')}`);
+  const dm = await defaultModel();
+  if (dm && !cfg.models.some((m) => `${cfg.provider}/${m}` === dm)) lines.push(`  默认模型（settings.model）: ${dm}`);
+  return lines.length ? lines.join('\n') : '  (无——用 settings set 配 Bearer 代理，或 pi auth 登录某个 provider)';
+}
+
 async function runOne(taskId) {
   const { loadStore, mutateStore, taskWorkspace } = await import('../../core/store.js');
   const { renderPrompt } = await import('../prompts/service.js');
@@ -264,20 +303,22 @@ async function runOne(taskId) {
       sessionManager: SessionManager.create(workspace, sessionsDir),
     };
 
-    // task 指定的 model 是 "Provider/ModelId" 字符串；
-    // createAgentSession 不解析字符串——必须先创建临时 session 触发扩展加载，
-    // 从 modelRuntime 拿到 Model 对象再传。
-    let resolvedModel = null;
-    if (task.model) {
-      const tmp = await createAgentSession(sessionOpts);
-      try {
-        resolvedModel = tmp.session?.modelRuntime?.snapshot?.all?.find(
-          (m) => `${m.provider}/${m.id}` === task.model,
-        ) || null;
-      } finally {
-        tmp.session?.dispose?.();
+    // 模型选择：task.model 优先，为空则回落到 settings.model（面板「默认模型」）。
+    // 两者都是 "Provider/ModelId" 字符串，如 "MiniMax/MiniMax-M3"。
+    // 空仍为空 → 交给 pi 自己的默认 provider。
+    const wantedModel = task.model || (await defaultModel());
+    if (wantedModel) {
+      const resolvedModel = await resolveModel(createAgentSession, sessionOpts, wantedModel);
+      if (resolvedModel) {
+        sessionOpts.model = resolvedModel;
+      } else {
+        // 不回落到 pi 默认 provider：那样会拿别的凭据去请求，得到难懂的 403/401。
+        // 直接把可用的模型列出来，让调用方改 task.model 或 settings.model。
+        throw new Error(
+          `模型未注册: ${wantedModel}\n本机已配置凭据的模型:\n${await availableModelLines()}` +
+            `\n用 task add --model <Provider/ModelId> 指定，或 settings set --model 设默认`,
+        );
       }
-      if (resolvedModel) sessionOpts.model = resolvedModel;
     }
 
     const { session } = await createAgentSession(sessionOpts);

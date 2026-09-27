@@ -66,7 +66,10 @@ export async function removePrompt(name) {
 
 export async function renderPrompt(name, input = '') {
   const p = await getPrompt(name);
-  return p.content.replace(/\$\{input:-([^}]*)\}/g, (_, dflt) => (input ? input : dflt)).replace(/\$input/g, input);
+  // 必须用**函数式**替换：替换串里的 $& / $` / $' 会被 String.replace 当作
+  // 替换模式展开（$& = 匹配到的 "$input" 本身），用户输入含 $& 时会被静默吞掉。
+  // 函数返回值不做模式解析。
+  return p.content.replace(/\$\{input:-([^}]*)\}/g, (_, dflt) => (input ? input : dflt)).replace(/\$input/g, () => input);
 }
 
 // ---------- 文件格式 ----------
