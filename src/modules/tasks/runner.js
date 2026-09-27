@@ -94,7 +94,8 @@ export function setExecutor(fn) {
 const subscribers = new Map(); // taskId -> Set<{res, heartbeat}>
 const ringBuffer = new Map(); // taskId -> [event]  断线重连补发用（最近 500 条）
 
-function pushEvent(taskId, event) {
+// 内部 helper：仅 SSE 推送，不落盘（用于补发历史等）
+function emit(taskId, event) {
   let ring = ringBuffer.get(taskId);
   if (!ring) {
     ring = [];
@@ -113,6 +114,31 @@ function pushEvent(taskId, event) {
       // 客户端断开，清理交给 req close
     }
   }
+}
+
+// 每个 task 一条落盘队列：保证落盘顺序与 emit 一致；
+// 失败也不阻塞 SSE（错误打日志，调试面板最多缺几条事件）
+const flushQueues = new Map(); // taskId -> Promise
+
+function pushEvent(taskId, event) {
+  emit(taskId, event); // 同步推 SSE
+  const prev = flushQueues.get(taskId) || Promise.resolve();
+  const next = prev.then(async () => {
+    try {
+      const { appendEvent } = await import('../../core/events.js');
+      await appendEvent(taskId, event);
+    } catch (e) {
+      console.error(`[task ${taskId}] 事件落盘失败:`, e.message);
+    }
+  }).catch(() => {});
+  flushQueues.set(taskId, next);
+  return next;
+}
+
+// 任务结束时等落盘队列排空（避免最后几条事件丢失）
+export async function awaitFlush(taskId) {
+  const q = flushQueues.get(taskId);
+  if (q) await q;
 }
 
 export function addSubscriber(taskId, res) {
@@ -323,19 +349,17 @@ async function runOne(taskId) {
 
     const { session } = await createAgentSession(sessionOpts);
 
+    // 用归一器把 pi 的内部事件转为 span 树事件（事件落 JSONL 后供调试面板使用）
+    const { createNormalizer } = await import('./normalize.js');
+    const normalizer = createNormalizer(taskId, (e) => pushEvent(taskId, e));
+
     const unsub = session.subscribe((event) => {
-      // 透传 App 关心的子集；完整原始事件已由 pi 落 JSONL
+      // 兼容旧客户端：text_delta 同时推一条 type:'text'，旧前端不受影响
       if (event.type === 'message_update' && event.assistantMessageEvent?.type === 'text_delta') {
         pushEvent(taskId, { type: 'text', delta: event.assistantMessageEvent.delta });
-      } else if (event.type === 'message_start') {
-        pushEvent(taskId, { type: 'message_start', role: event.message?.role });
-      } else if (event.type === 'tool_execution_start') {
-        pushEvent(taskId, { type: 'tool_start', tool: event.toolName, args: event.args });
-      } else if (event.type === 'tool_execution_end') {
-        pushEvent(taskId, { type: 'tool_end', tool: event.toolName });
-      } else if (event.type === 'agent_end') {
-        pushEvent(taskId, { type: 'agent_end' });
       }
+      // 完整事件归一（用于 trace 面板）
+      normalizer.ingest(event);
     });
 
     try {
@@ -347,8 +371,14 @@ async function runOne(taskId) {
       if (lastMsg?.stopReason === 'error') {
         throw new Error(lastMsg.errorMessage || '模型调用失败');
       }
+      normalizer.finalize({ error: null });
+      await awaitFlush(taskId);
       await finishTask(taskId, result);
       closeTaskStream(taskId, { type: 'done', result });
+    } catch (err) {
+      normalizer.finalize({ error: err.message });
+      await awaitFlush(taskId);
+      throw err;
     } finally {
       unsub();
       session.dispose();

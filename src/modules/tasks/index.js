@@ -160,6 +160,14 @@ const actions = [
     },
     render: (r) => (r ? (r.status === 'done' ? r.result : `错误: ${r.error}`) : ''),
   },
+  {
+    id: 'task.timeline',
+    cli: ['task', 'timeline'],
+    http: ['GET', '/api/tasks/:id/timeline'],
+    summary: '任务 span 树（调试面板用：从事件 JSONL 重建）',
+    args: ['id'],
+    run: (ctx) => svc.getTaskTimeline(ctx.id),
+  },
 ];
 
 export default { id: 'tasks', resource: 'task', view: true, actions };

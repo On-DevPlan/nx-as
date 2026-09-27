@@ -4,6 +4,7 @@ import {
   authStatus,
   mask,
 } from './service.js';
+import { VERSION } from '../../core/version.js';
 
 // auth.verify 是公开路由（App 无 token 探活），鉴权在 api.js 的 PUBLIC_PATHS 白名单
 const actions = [
@@ -15,9 +16,9 @@ const actions = [
     run: async (ctx) => {
       try {
         const expected = await ensureToken(null);
-        return { valid: ctx.token === expected, version: '0.1.2' };
+        return { valid: ctx.token === expected, version: VERSION };
       } catch {
-        return { valid: false, version: '0.1.2' };
+        return { valid: false, version: VERSION };
       }
     },
   },

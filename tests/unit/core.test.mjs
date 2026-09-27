@@ -121,6 +121,116 @@ test('runner.defaultModel：settings.model 优先，空则回落 Bearer 代理',
   assert.equal(await defaultModel(), '');
 });
 
+// ---------- events JSONL ----------
+test('events: append/list/remove，taskId 校验', async () => {
+  const { appendEvent, listEvents, removeEvents } = await imp('src/core/events.js');
+  const tid = 't_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+
+  // 1) 空时 list → 空数组
+  assert.deepEqual(await listEvents(tid), []);
+
+  // 2) append 多条，list 按时间顺序返回
+  await appendEvent(tid, { type: 'task_start' });
+  await appendEvent(tid, { type: 'span_open', spanId: 's1', name: 'turn_1', spanType: 'turn' });
+  await appendEvent(tid, { type: 'text', spanId: 's1', delta: 'hi' });
+  await appendEvent(tid, { type: 'span_close', spanId: 's1' });
+
+  const all = await listEvents(tid);
+  assert.equal(all.length, 4, '4 条事件都被存下');
+  assert.equal(all[0].type, 'task_start');
+  assert.equal(all[1].type, 'span_open');
+  assert.equal(all[1].spanType, 'turn', 'span 的子类型独立存为 spanType，不与事件 type 冲突');
+  assert.equal(all[3].type, 'span_close');
+  for (const e of all) assert.equal(typeof e.ts, 'number', '每条带 ts 时间戳');
+
+  // 3) 非法 taskId 拒绝
+  await assert.rejects(() => appendEvent('../etc', {}), /非法 taskId/);
+  await assert.rejects(() => appendEvent('not_start_with_t', {}), /非法 taskId/);
+
+  // 4) removeEvents 后再 list → 空
+  await removeEvents(tid);
+  assert.deepEqual(await listEvents(tid), []);
+
+  // 5) removeEvents 对不存在的不抛错
+  await removeEvents(tid);
+});
+
+// ---------- normalize（pi 事件 → span 树） ----------
+test('normalize: turn_start/message_update/tool call → span 树开/续/关', async () => {
+  const { createNormalizer } = await imp('src/modules/tasks/normalize.js');
+  const out = [];
+  const n = createNormalizer('t_test', (e) => out.push(e));
+
+  n.ingest({ type: 'turn_start' });
+  n.ingest({ type: 'message_start', message: { role: 'assistant' } });
+  n.ingest({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: '你好' } });
+  n.ingest({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: '先思考' } });
+  n.ingest({ type: 'agent_end' });
+  n.ingest({ type: 'tool_execution_start', toolName: 'bash', args: { command: 'echo hi' } });
+  n.ingest({ type: 'tool_execution_end', toolName: 'bash', result: { output: 'hi\n' } });
+  n.ingest({ type: 'turn_end' });
+  n.finalize();
+
+  // 期望事件序列（去掉 ts 字段后逐项断言）：
+  // 1. turn_start → span_open turn-1
+  // 2. message_start(assistant) → span_open llm-1(parentId=turn-1)
+  // 3. text_delta → span_text 给 llm-1
+  // 4. thinking_delta → span_data 给 llm-1
+  // 5. agent_end → 关 llm-1
+  // 6. tool_execution_start → span_open tool-1(parentId=turn-1)
+  // 7. tool_execution_end → 关 tool-1
+  // 8. turn_end → 关 turn-1
+  // 9. finalize → 已经空栈，无事件
+  const strip = (e) => { const { ts: _ts, ...rest } = e; return rest; };
+  const seq = out.map(strip);
+
+  assert.equal(seq[0].type, 'span_open');
+  assert.equal(seq[0].spanType, 'turn');
+
+  assert.equal(seq[1].type, 'span_open');
+  assert.equal(seq[1].spanType, 'llm');
+  assert.equal(seq[1].parentId, seq[0].spanId, 'llm 的父 span 是 turn');
+
+  assert.equal(seq[2].type, 'span_text');
+  assert.equal(seq[2].spanId, seq[1].spanId, 'text 归给当前 llm');
+  assert.equal(seq[2].delta, '你好');
+
+  assert.equal(seq[3].type, 'span_data');
+  assert.equal(seq[3].key, 'thinking');
+  assert.equal(seq[3].spanId, seq[1].spanId);
+
+  assert.equal(seq[4].type, 'span_close');
+  assert.equal(seq[4].spanId, seq[1].spanId, 'agent_end 关掉 llm');
+
+  assert.equal(seq[5].type, 'span_open');
+  assert.equal(seq[5].spanType, 'tool');
+  assert.equal(seq[5].name, 'bash');
+  assert.equal(seq[5].parentId, seq[0].spanId, 'tool 落到 turn 下');
+
+  assert.equal(seq[6].type, 'span_close');
+  assert.equal(seq[6].spanId, seq[5].spanId);
+  assert.equal(seq[6].status, 'ok');
+
+  assert.equal(seq[7].type, 'span_close');
+  assert.equal(seq[7].spanId, seq[0].spanId);
+
+  assert.equal(seq.length, 8, 'finalize 时栈已空，不再产生事件');
+});
+
+test('normalize: 异常 finalize 把残留 span 都标 error', async () => {
+  const { createNormalizer } = await imp('src/modules/tasks/normalize.js');
+  const out = [];
+  const n = createNormalizer('t_test', (e) => out.push(e));
+  n.ingest({ type: 'turn_start' });
+  n.ingest({ type: 'message_start', message: { role: 'assistant' } });
+  n.finalize({ error: 'boom' });
+
+  // 应该关两个 span（turn + llm），都标 error
+  const closes = out.filter((e) => e.type === 'span_close');
+  assert.equal(closes.length, 2);
+  for (const c of closes) assert.equal(c.status, 'error');
+});
+
 // ---------- prompts ----------
 const promptService = await imp('src/modules/prompts/service.js');
 

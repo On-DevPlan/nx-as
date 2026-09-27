@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.0 (2026-09-27)
+
+调试面板：完整事件流 + Trace 视图 + 对话页。
+
+### Added
+
+- **完整事件流**：runner 把 pi 的 turn / llm / tool 事件归一为 span 树，落 `~/.nx-as/tasks/<taskId>.events.jsonl`（append-only），并随 SSE 实时推送。旧 `type:'text'` 事件继续推，旧前端兼容。
+- **`GET /api/tasks/:id/timeline`**：从事件 JSONL 重建 span 树（`{spans, tree, rootIds, total}`）。CLI `task timeline` 同步可用。
+- **面板「对话」视图**：任务详情改对话形态——Markdown 渲染（零依赖：代码块/行内代码/粗体/标题/列表）、thinking 折叠、工具调用卡片（可展开输入/输出）。
+- **面板「调试」视图**：span 树 + 耗时 + 状态（ok/error）+ 点击看详情（文本/属性/输出）。running 任务每 2s 自动刷新。
+
+### Changed
+
+- 事件归一器（`src/modules/tasks/normalize.js`）：assistant 消息按 `stopReason` 决定 llm span 状态——模型 4xx 错误在 trace 里精确落在失败的 llm span 上，不再误标 ok。
+
 ## 0.1.2 (2026-09-26)
 
 Bug 修复。

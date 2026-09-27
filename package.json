@@ -1,6 +1,6 @@
 {
   "name": "nx-as",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Personal AI agent server powered by pi — CLI + Web panel + token-authenticated API for phone apps",
   "type": "module",
   "bin": {

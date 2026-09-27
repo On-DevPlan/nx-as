@@ -25,6 +25,84 @@ export async function getTask(id) {
   return { ...t, streaming: live && hasSubscribers(id) };
 }
 
+// 调试面板用：把事件 JSONL 重建成 span 树。
+// 返回 { spans, tree, rootIds }：
+//   spans = Map<id, span>（带 text/attrs 由 span_open/text/data/close 累积得出）
+//   tree  = Map<id, [childId, ...]> 父→子
+//   rootIds = [id, ...]              顶层 span（无 parent 或 parentId 找不到）
+export async function getTaskTimeline(id) {
+  const store = await loadStore();
+  if (!store.tasks.find((t) => t.id === id)) throw notFound(`任务不存在: ${id}`);
+  const { listEvents } = await import('../../core/events.js');
+  const events = await listEvents(id);
+
+  const spans = new Map();
+  const tree = new Map();
+  const rootIds = [];
+
+  // 先建空 span 占位（open 一定先到，但万一 close 先到——避免 spanId 找不到）
+  for (const e of events) {
+    if (e.type === 'span_open') {
+      spans.set(e.spanId, {
+        id: e.spanId,
+        parentId: e.parentId,
+        spanType: e.spanType,
+        name: e.name,
+        input: e.input,
+        text: '',
+        attrs: {},
+        status: 'ok',
+        output: null,
+        startMs: e.ts,
+        endMs: null,
+      });
+    }
+  }
+
+  for (const e of events) {
+    const s = spans.get(e.spanId);
+    switch (e.type) {
+      case 'span_open':
+        // 已建占位；建父子链
+        if (e.parentId && spans.has(e.parentId)) {
+          if (!tree.has(e.parentId)) tree.set(e.parentId, []);
+          tree.get(e.parentId).push(e.spanId);
+        } else {
+          rootIds.push(e.spanId);
+        }
+        break;
+      case 'span_text':
+        if (s) s.text += e.delta || '';
+        break;
+      case 'span_data':
+        if (s) s.attrs[e.key] = e.value;
+        break;
+      case 'span_close':
+        if (s) {
+          s.endMs = e.ts;
+          s.status = e.status || 'ok';
+          s.output = e.output ?? s.output;
+        }
+        break;
+      // 其它事件类型（text / task_start / done / error）不在 timeline 视图里
+      // 直接跳过——它们在 SSE 流里继续可用，旧前端不受影响
+    }
+  }
+
+  return {
+    taskId: id,
+    spans: [...spans.values()].map((s) => ({
+      ...s,
+      // 不要把 input/output 整对象塞回去（tool input 可能很大）；让前端按需 GET 单 span
+      input: undefined,
+      output: s.output === null ? undefined : s.output,
+    })),
+    tree: Object.fromEntries(tree),
+    rootIds,
+    total: events.length,
+  };
+}
+
 export async function addTask({ promptId, input = '', model = '', run = undefined } = {}) {
   if (!promptId) throw badInput('缺少 promptId（提示词名，先 prompt list 查看）');
   const settings = await getSettings();
