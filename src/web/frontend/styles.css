@@ -195,9 +195,7 @@ textarea { height: auto; padding: 6px 8px; width: 100%; resize: vertical; }
 }
 .think-body { margin-top: 4px; }
 .tool-card {
-  border: 1px solid var(--border);
   border-radius: 4px;
-  background: var(--paper);
   margin-bottom: 4px;
   overflow: hidden;
 }
@@ -250,3 +248,96 @@ textarea { height: auto; padding: 6px 8px; width: 100%; resize: vertical; }
 .trace-details { padding: 4px 8px; }
 .trace-block { border-top: 1px solid var(--border); padding-top: 4px; margin-top: 4px; }
 .trace-block .output { max-height: 200px; }
+.trace-preview { color: var(--mid); font-size: 11px; }
+
+/* 时间线瀑布图（时序交互视图） */
+.tl-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--row-h);
+  cursor: pointer;
+  border-bottom: 1px solid var(--soft-2);
+}
+.tl-row.active, .tl-row:hover { background: var(--soft); }
+.tl-label {
+  width: 140px;
+  flex: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+.tl-track {
+  flex: 1;
+  height: 12px;
+  position: relative;
+  background:
+    repeating-linear-gradient(to right, transparent 0, transparent calc(10% - 1px), var(--soft-2) calc(10% - 1px), var(--soft-2) 10%);
+  border-radius: 2px;
+}
+.tl-bar {
+  position: absolute;
+  top: 2px;
+  height: 8px;
+  border-radius: 2px;
+  min-width: 3px;
+}
+.tl-turn { background: var(--soft-2); border: 1px solid var(--mid); }
+.tl-llm { background: var(--ink); }
+.tl-tool { background: #b7a942; }
+.tl-error { background: var(--bad); border-color: var(--bad); }
+.tl-dur { width: 52px; text-align: right; flex: none; }
+
+/* 对话页增强（pi-web 模式）：用户气泡右对齐 / 复制按钮 / 工具卡描边 */
+.msg.user { display: flex; justify-content: flex-end; }
+.msg.user .bubble {
+  background: var(--soft);
+  border: 1px solid var(--soft-2);
+}
+.msg-prompt { font-size: 11px; margin-bottom: 2px; }
+.msg.assistant { position: relative; }
+.msg-copy {
+  position: absolute;
+  right: 4px;
+  top: -14px;
+  border: 0;
+  background: transparent;
+  color: var(--mid);
+  font-size: 11px;
+  cursor: pointer;
+  transition: opacity 0.12s;
+}
+.bubble { position: relative; }
+.bubble.assistant { background: var(--paper); }
+
+.tool-card {
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  background: rgba(34, 197, 94, 0.04);
+}
+.tool-card.tool-error {
+  border-color: rgba(179, 38, 30, 0.45);
+  background: rgba(179, 38, 30, 0.05);
+}
+.tool-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 5px 10px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+}
+.tool-name { font-weight: 600; font-size: 11px; flex: none; }
+.tool-preview {
+  flex: 1;
+  color: var(--mid);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-chevron { color: var(--mid); font-size: 10px; flex: none; transition: transform 0.15s; }

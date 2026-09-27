@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.1 (2026-09-27)
+
+调试面板补全：时序瀑布图 + 对话页强化（参考 pi-web 的成熟模式）。
+
+### Added
+
+- **调试视图「时序」模式**：Gantt 式时间线瀑布图——每个 span 一行水平条，按全局时间比例定位；llm 深色 / tool 黄 / turn 灰 / error 红；与「树」模式一键切换。
+- **对话页**：用户输入渲染为右对齐气泡（带 /promptId 前缀）；turn 内 content blocks 按 startMs 交错渲染（thinking → 文本 → 工具卡片顺序与真实执行时序一致）；assistant 消息 hover 显示复制按钮（pi-web 模式）；chat 滚动 stick-to-bottom（用户上滚即停止吸底）。
+- **工具卡片**（pi-web ToolCallBlock 式）：绿/红描边区分成败；头部显示参数智能摘要（command/path/file_path/pattern/query 优先）；时长徽章；chevron 展开输入/输出。
+- **timeline API 保留 input/output**（4000 字符截断保护）——工具参数预览与结果在面板直接可见。
+- **smoke 增强（26→37）**：fake executor 走完整事件管道（turn → llm(thinking+text) → tool → done），timeline 的 span 树 / tool input/output / 起止时间 / 树挂载全部有端到端断言。
+
 ## 0.2.0 (2026-09-27)
 
 调试面板：完整事件流 + Trace 视图 + 对话页。

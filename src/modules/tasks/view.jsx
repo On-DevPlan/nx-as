@@ -93,7 +93,6 @@ function Markdown({ text }) {
         i++;
         continue;
       }
-      // 普通段落：连续非空、非结构行
       const para = [];
       while (i < lines.length && lines[i].trim() && !/^```/.test(lines[i]) && !/^(#{1,3})\s/.test(lines[i]) && !isListItem(lines[i]) && !isOrderedItem(lines[i])) {
         para.push(lines[i]);
@@ -115,29 +114,92 @@ function fmtDur(startMs, endMs) {
   return d < 1000 ? `${d}ms` : `${(d / 1000).toFixed(1)}s`;
 }
 
-// timeline spans → 对话消息：
-//   每个 turn span → 一条 assistant 消息（text + thinking）
-//   turn 下的 tool span → 独立 tool 卡片消息
-function spansToMessages(spans, tree, rootIds) {
-  const byId = new Map(spans.map((s) => [s.id, s]));
+// pi-web 式工具参数智能摘要：command/path/file_path/pattern/query 优先
+function toolPreview(input) {
+  if (!input || typeof input !== 'object') return '';
+  const keys = Object.keys(input);
+  if (!keys.length) return '';
+  for (const k of ['command', 'path', 'file_path', 'pattern', 'query']) {
+    if (k in input) return String(input[k]).slice(0, 80);
+  }
+  return String(input[keys[0]]).slice(0, 80);
+}
+
+// timeline spans → 对话消息（pi-web 式 content blocks 交错）：
+//   用户输入 → 右对齐 user 气泡
+//   每个 turn：其子 span（llm/tool）按 startMs 排序交错渲染——
+//   thinking/text 归为 assistant 内容块，tool 成为独立卡片，
+//   顺序与真实执行时序一致（模型先想、再调工具、再说话，都按时间落位）
+function spansToMessages(task, tl) {
   const msgs = [];
+  if (task?.input) {
+    msgs.push({ kind: 'user', text: task.input, promptId: task.promptId });
+  }
+  const byId = new Map(tl.spans.map((s) => [s.id, s]));
   const visit = (id, depth) => {
     const s = byId.get(id);
     if (!s) return;
     if (s.spanType === 'turn') {
-      msgs.push({ kind: 'assistant', span: s });
-      for (const c of tree[id] || []) {
-        const cs = byId.get(c);
-        if (cs && cs.spanType === 'tool') msgs.push({ kind: 'tools', tool: cs });
+      // 收集 turn 的直接子 span，按 startMs 排序
+      const kids = (tl.tree[id] || []).map((c) => byId.get(c)).filter(Boolean).sort((a, b) => a.startMs - b.startMs);
+      // 同一 turn 内：连续的 llm 内容合成一个 assistant 气泡的 blocks，tool 独立卡片
+      let blocks = [];
+      const flush = () => {
+        if (blocks.length) {
+          msgs.push({ kind: 'assistant', blocks });
+          blocks = [];
+        }
+      };
+      for (const c of kids) {
+        if (c.spanType === 'llm') {
+          if (c.attrs?.thinking) blocks.push({ type: 'thinking', text: c.attrs.thinking });
+          if (c.text) blocks.push({ type: 'text', text: c.text });
+        } else if (c.spanType === 'tool') {
+          flush();
+          msgs.push({ kind: 'tools', tool: c });
+        }
       }
+      flush();
     } else if (s.spanType === 'llm' && depth === 0) {
-      // 没有外层 turn 的散 llm span（兼容）
-      msgs.push({ kind: 'assistant', span: s });
+      // 没有外层 turn 的散 llm span（兼容老数据）
+      msgs.push({
+        kind: 'assistant',
+        blocks: [
+          ...(s.attrs?.thinking ? [{ type: 'thinking', text: s.attrs.thinking }] : []),
+          ...(s.text ? [{ type: 'text', text: s.text }] : []),
+        ],
+      });
     }
-    for (const c of tree[id] || []) visit(c, depth + 1);
+    for (const c of tl.tree[id] || []) visit(c, depth + 1);
   };
-  for (const r of rootIds || []) visit(r, 0);
+  for (const r of tl.rootIds || []) visit(r, 0);
+  // streaming 中的实时文本（还没落 timeline）
+  if (tl.liveText) {
+    msgs.push({ kind: 'assistant', blocks: [{ type: 'text', text: tl.liveText, streaming: true }] });
+  }
   return msgs;
+}
+
+function CopyBtn({ getText }) {
+  const [copied, setCopied] = useState(false);
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      className="msg-copy"
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onClick={() => {
+        navigator.clipboard?.writeText(getText()).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        });
+      }}
+      style={{ opacity: hover || copied ? 1 : 0 }}
+      title="复制"
+    >
+      {copied ? '已复制' : '复制'}
+    </button>
+  );
 }
 
 function ThinkingBlock({ text }) {
@@ -153,8 +215,11 @@ function ThinkingBlock({ text }) {
   );
 }
 
+// pi-web ToolCallBlock 式：绿/红描边 + 参数预览 + 时长 + 展开输入输出
 function ToolCard({ tool }) {
   const [open, setOpen] = useState(false);
+  const isError = tool.status === 'error';
+  const preview = toolPreview(tool.input);
   const argsText = useMemo(() => (tool.input ? JSON.stringify(tool.input, null, 2) : ''), [tool.input]);
   const outText = useMemo(() => {
     const o = tool.output;
@@ -162,10 +227,12 @@ function ToolCard({ tool }) {
     return typeof o === 'string' ? o : JSON.stringify(o, null, 2);
   }, [tool.output]);
   return (
-    <div className="tool-card">
-      <button className="think-toggle" onClick={() => setOpen(!open)}>
-        {open ? '▾' : '▸'} 工具 <span className="mono">{tool.name}</span>
-        <span className="trace-meta"> {fmtDur(tool.startMs, tool.endMs)}</span>
+    <div className={isError ? 'tool-card tool-error' : 'tool-card'}>
+      <button className="tool-head" onClick={() => setOpen(!open)}>
+        <span className={isError ? 'tool-name bad mono' : 'tool-name mono'}>{tool.name}</span>
+        <span className="tool-preview mono">{preview || (open ? '' : '…')}</span>
+        <span className="trace-meta">{fmtDur(tool.startMs, tool.endMs)}</span>
+        <span className="tool-chevron" style={{ transform: open ? 'rotate(180deg)' : 'none' }}>▾</span>
       </button>
       {open && (
         <div className="tool-body">
@@ -189,6 +256,7 @@ export default function TasksView() {
   const [err, setErr] = useState('');
   const esRef = useRef(null);
   const scrollRef = useRef(null);
+  const stickRef = useRef(true); // 用户上滚时停止吸底
 
   const refresh = useCallback(async () => {
     try {
@@ -206,7 +274,7 @@ export default function TasksView() {
     return () => clearInterval(t);
   }, [refresh]);
 
-  // 选中任务 → 拉 timeline（终态任务用）+ SSE（running 时增量）
+  // 选中任务 → 拉 timeline（终态）+ SSE（running 增量）
   useEffect(() => {
     setLiveText('');
     setTimeline(null);
@@ -227,7 +295,6 @@ export default function TasksView() {
         if (ev.type === 'text') setLiveText((s) => s + ev.delta);
         else if (ev.type === 'done' || ev.type === 'error') {
           refresh();
-          // 终态后拉一次完整 timeline（拿到 thinking/tool span）
           api('GET', `/api/tasks/${sel}/timeline`).then((d) => { if (alive) setTimeline(d); }).catch(() => {});
         }
       } catch { /* ignore */ }
@@ -239,11 +306,22 @@ export default function TasksView() {
     };
   }, [sel, refresh]);
 
-  // 消息流：终态/历史任务从 timeline 重建；running 时在末尾追加 live 文本
+  // stick-to-bottom（pi-web 模式）：内容变化时，只有用户本来就在底部才自动滚动
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el && stickRef.current) el.scrollTop = el.scrollHeight;
+  }, [timeline, liveText]);
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  };
+
   const messages = useMemo(() => {
     if (!timeline) return [];
-    return spansToMessages(timeline.spans, timeline.tree, timeline.rootIds);
-  }, [timeline]);
+    return spansToMessages(task, { ...timeline, liveText });
+  }, [timeline, task, liveText]);
 
   const submit = async () => {
     setErr('');
@@ -312,39 +390,40 @@ export default function TasksView() {
           </div>
 
           {viewMode === 'chat' && (
-            <>
-              <div className="chat-scroll" ref={scrollRef}>
-                {messages.length === 0 && !liveText && <div className="row mid">（暂无消息）</div>}
-                {messages.map((m) => (
-                  m.kind === 'tools'
-                    ? <div key={m.tool.id} className="msg"><ToolCard tool={m.tool} /></div>
-                    : (
-                      <div key={m.span.id} className="msg">
-                        <ThinkingBlock text={m.span.attrs?.thinking} />
-                        <div className="bubble assistant">
-                          <Markdown text={m.span.text} />
-                        </div>
+            <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
+              {messages.length === 0 && !running && <div className="row mid">（暂无消息）</div>}
+              {messages.map((m, i) => {
+                if (m.kind === 'user') {
+                  return (
+                    <div key={`u${i}`} className="msg user">
+                      <div className="bubble user-bubble">
+                        {m.promptId && <div className="mid msg-prompt">/{m.promptId}</div>}
+                        <div>{m.text}</div>
                       </div>
-                    )
-                ))}
-                {liveText && (
-                  <div className="msg">
-                    <div className="bubble assistant streaming">
-                      <Markdown text={liveText} />
                     </div>
+                  );
+                }
+                if (m.kind === 'tools') {
+                  return <div key={m.tool.id} className="msg"><ToolCard tool={m.tool} /></div>;
+                }
+                // assistant：blocks 顺序渲染（thinking 折叠 + text Markdown）
+                return (
+                  <div key={m.blocks[0]?.text?.slice(0, 20) + i} className="msg assistant">
+                    <CopyBtn getText={() => m.blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n')} />
+                    {m.blocks.map((b, n) =>
+                      b.type === 'thinking'
+                        ? <ThinkingBlock key={n} text={b.text} />
+                        : (
+                          <div key={n} className={b.streaming ? 'bubble assistant streaming' : 'bubble assistant'}>
+                            <Markdown text={b.text} />
+                          </div>
+                        ),
+                    )}
                   </div>
-                )}
-                {running && !liveText && <div className="row mid">执行中…</div>}
-              </div>
-              <div className="chat-input">
-                <Input
-                  value={form.input}
-                  onChange={(v) => setForm({ ...form, input: v })}
-                  placeholder={running ? '任务执行中…' : '补充输入（会作为新任务提交）'}
-                />
-                <Btn onClick={submit} disabled={!form.promptId || running}>发送</Btn>
-              </div>
-            </>
+                );
+              })}
+              {running && !liveText && <div className="row mid">执行中…</div>}
+            </div>
           )}
 
           {viewMode === 'trace' && <TraceView taskId={sel} taskStatus={task?.status} />}

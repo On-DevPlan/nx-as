@@ -93,14 +93,24 @@ export async function getTaskTimeline(id) {
     taskId: id,
     spans: [...spans.values()].map((s) => ({
       ...s,
-      // 不要把 input/output 整对象塞回去（tool input 可能很大）；让前端按需 GET 单 span
-      input: undefined,
-      output: s.output === null ? undefined : s.output,
+      // input/output 截断保护：tool 参数预览和结果在面板要用，整块太大时截断
+      // （200KB 级 tool result 全量回传会拖垮列表渲染；需要全文再看单 span 详情）
+      input: truncateForList(s.input),
+      output: s.output === null || s.output === undefined ? undefined : truncateForList(s.output),
     })),
     tree: Object.fromEntries(tree),
     rootIds,
     total: events.length,
   };
+}
+
+const LIST_PREVIEW_LIMIT = 4000; // 字符；超过截断（面板预览足够，全文等 span 详情接口）
+
+function truncateForList(value) {
+  if (value == null) return value;
+  const text = typeof value === 'string' ? value : JSON.stringify(value);
+  if (text.length <= LIST_PREVIEW_LIMIT) return value;
+  return `${text.slice(0, LIST_PREVIEW_LIMIT)}\n…（截断，共 ${text.length} 字符）`;
 }
 
 export async function addTask({ promptId, input = '', model = '', run = undefined } = {}) {

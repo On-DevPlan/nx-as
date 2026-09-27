@@ -295,16 +295,28 @@ async function runOne(taskId) {
 
   try {
     if (executorOverride || process.env.NX_AS_FAKE_EXECUTOR === '1') {
-      // 测试路径：不碰 pi。NX_AS_FAKE_EXECUTOR 供 smoke 端到端使用
-      const emit = {
-        text: (delta) => pushEvent(taskId, { type: 'text', delta }),
-      };
-      const result =
-        executorOverride
-          ? await executorOverride(task, emit)
-          : `echo: ${task.input}（fake executor）`;
-      await finishTask(taskId, result);
-      closeTaskStream(taskId, { type: 'done', result });
+      // 测试路径：不碰 pi。NX_AS_FAKE_EXECUTOR 供 smoke 端到端使用。
+      // 与真路径共享同一套事件管道（pushEvent → JSONL + SSE），并模拟完整
+      // pi 事件序列（turn → llm(thinking+text) → tool → done），
+      // 让 timeline / 对话页 / 调试视图在无密钥环境下也能端到端验证。
+      const { createNormalizer } = await import('./normalize.js');
+      const normalizer = createNormalizer(taskId, (e) => pushEvent(taskId, e));
+
+      normalizer.ingest({ type: 'turn_start' });
+      normalizer.ingest({ type: 'message_start', message: { role: 'assistant' } });
+      normalizer.ingest({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: '（fake）先想想…' } });
+      const fakeText = `echo: ${task.input}（fake executor）`;
+      normalizer.ingest({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: fakeText } });
+      normalizer.ingest({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop' } });
+      normalizer.ingest({ type: 'tool_execution_start', toolName: 'bash', args: { command: 'echo ok' } });
+      normalizer.ingest({ type: 'tool_execution_end', toolName: 'bash', result: { output: 'ok\n', isError: false } });
+      normalizer.ingest({ type: 'turn_end' });
+      normalizer.finalize();
+      await awaitFlush(taskId);
+
+      // 旧客户端兼容：text 事件仍单独推
+      await finishTask(taskId, fakeText);
+      closeTaskStream(taskId, { type: 'done', result: fakeText });
       return;
     }
 

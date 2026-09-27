@@ -127,6 +127,27 @@ try {
   ok(text.includes('"type":"task_start"'), 'SSE replay 含 task_start');
   ok(text.includes('"type":"done"'), 'SSE replay 含 done');
 
+  // 5.5 timeline：事件管道端到端（span 树 + tool span + thinking）
+  const tl = await req('GET', `/api/tasks/${task.data.id}/timeline`);
+  ok(tl.status === 200 && Array.isArray(tl.data?.spans), 'timeline 200 且含 spans');
+  const spans = tl.data.spans || [];
+  const turnSpans = spans.filter((s) => s.spanType === 'turn');
+  const llmSpans = spans.filter((s) => s.spanType === 'llm');
+  const toolSpans = spans.filter((s) => s.spanType === 'tool');
+  ok(turnSpans.length === 1, `timeline 有 1 个 turn span（got ${turnSpans.length}）`);
+  ok(llmSpans.length >= 1, `timeline 有 llm span（got ${llmSpans.length}）`);
+  ok(llmSpans.some((s) => s.text?.includes('SMOKE_INPUT')), 'llm span 文本含渲染后的输入');
+  ok(llmSpans.some((s) => s.attrs?.thinking), 'llm span 捕获 thinking');
+  ok(toolSpans.length === 1, `timeline 有 1 个 tool span（got ${toolSpans.length}）`);
+  const toolSpan = toolSpans[0];
+  ok(toolSpan?.name === 'bash', 'tool span 名为 bash');
+  ok(toolSpan?.input?.command === 'echo ok', 'tool span 保留 input.args');
+  ok(toolSpan?.output?.output === 'ok\n', 'tool span 保留 output');
+  ok(toolSpan?.startMs && toolSpan?.endMs && toolSpan.endMs >= toolSpan.startMs, 'tool span 有起止时间');
+  // 树结构：tool 挂在 turn 下
+  const turnId = turnSpans[0]?.id;
+  ok((tl.data.tree[turnId] || []).includes(toolSpan?.id), 'tool span 挂在 turn 下（树结构正确）');
+
   // 6. task remove
   const rm = await req('DELETE', `/api/tasks/${task.data.id}`);
   ok(rm.status === 200 && rm.data.status === 'ok', 'task remove');
