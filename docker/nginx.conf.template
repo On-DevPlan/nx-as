@@ -31,11 +31,11 @@ ${NXAS_TLS_BLOCK}
         add_header X-Nxas-Device $nxas_device always;
     }
 
-    # ── pi-web 完整页面（受同一 auth_request 拦截；device token 鉴权后可见）──
-    # EventSource/SSE 与 WebSocket 升级头均透传； pi-web 的 API 前缀 /api/ 原样保留
+    # ── pi-web 完整页面（受同一 auth_request 拦截；登录一次 cookie 全站携带）──
     location /pi/ {
         auth_request /_nxas_auth;
         auth_request_set $nxas_device $upstream_http_x_device_id;
+        error_page 401 = @nxas_login;
         proxy_pass http://127.0.0.1:30141/;
         proxy_set_header Authorization "Basic ${NXAS_MACHINE_B64}";
         proxy_http_version 1.1;
@@ -58,9 +58,16 @@ ${NXAS_TLS_BLOCK}
         proxy_pass_request_body off;
         proxy_set_header Content-Length "";
         proxy_set_header Authorization $http_authorization;
+        proxy_set_header Cookie $http_cookie;
+        proxy_set_header Accept $http_accept;
         proxy_set_header X-Original-Uri $request_uri;
         proxy_set_header X-Original-Method $request_method;
         proxy_set_header X-Forwarded-For $remote_addr;
+    }
+
+    # 未登录的浏览器页面请求 → 跳 nx-as 登录页（登录后回原路径）
+    location @nxas_login {
+        return 302 /login?next=$request_uri;
     }
 
     # ── 管理面板（管理密钥在 nx-as 侧校验）──

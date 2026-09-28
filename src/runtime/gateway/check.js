@@ -80,14 +80,8 @@ export async function handleAuthCheck(req, res, url) {
     return;
   }
   if (r.decision === 'deny-auth') {
-    // 浏览器页面请求（Accept: text/html）→ 302 到登录页（登录后回原路径）
-    const accept = req.headers.accept || '';
-    if (accept.includes('text/html')) {
-      const next = encodeURIComponent(rawUri || '/');
-      res.writeHead(302, { Location: `/login?next=${next}` });
-      res.end();
-      return;
-    }
+    // auth_request 契约只接受 2xx/401/403（302 会变 500）；浏览器跳登录由
+    // nginx 侧 error_page 401 => @nxas_login 完成（模板负责）
     res.writeHead(401, { 'Retry-After': String(r.retryAfterSec) });
     res.end();
     return;
