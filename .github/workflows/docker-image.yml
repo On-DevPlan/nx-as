@@ -16,6 +16,7 @@ jobs:
     name: Build image & package
     runs-on: ubuntu-latest
     outputs:
+      version: ${{ steps.meta.outputs.version }}
       image_tag: ${{ steps.meta.outputs.image_tag }}
     steps:
       - uses: actions/checkout@v4
@@ -100,7 +101,7 @@ jobs:
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
-          name: nx-as-image-${{ needs.build.outputs.image_tag }}
+          name: nx-as-image-${{ needs.build.outputs.version }}
           path: .
 
       - name: 上传镜像包与 compose 到 47
