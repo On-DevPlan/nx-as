@@ -9,7 +9,8 @@ DATA=/data
 mkdir -p "$DATA" "$DATA/pi-agent/extensions" "$DATA/pi-agent/skills"
 
 # ---------- 1. 机机密码（物化到 store，保证 nginx conf 与 launcher 读同一个值） ----------
-export NX_AS_HOME=$DATA   # store = /data/store.json；Dockerfile 已设，这里显式兜底
+export NX_AS_HOME=/data      # appDir = /data
+export NX_AS_STORE=/data/store.json  # store = /data/store.json（paths.js 优先级：NX_AS_STORE || ~/APP_DIR）
 # JS 独立成文件（docker/secret-init.mjs）：node -e 的多行脚本在 ash 下传递易被破坏
 SECRET=$(node /app/docker/secret-init.mjs 2>/tmp/secret-init.err)
 cat /tmp/secret-init.err >&2 2>/dev/null || true
