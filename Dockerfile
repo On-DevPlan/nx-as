@@ -27,11 +27,13 @@ FROM node:22-alpine
 RUN apk add --no-cache nginx openssl tini gettext \
     && mkdir -p /run/nginx /etc/nginx/ssl /etc/nginx/http.d /data
 
-# 拷贝 nx-as 构建产物（src + 已 prune 的 node_modules + bin + 面板 public）
+# 拷贝 nx-as 构建产物（src + 已 prune 的 node_modules + bin + 面板 public + package.json）
+# version.js 用 require('../../package.json') 读版本号，必须带
 COPY --from=builder /build/bin /app/bin
 COPY --from=builder /build/src /app/src
 COPY --from=builder /build/node_modules /app/node_modules
 COPY --from=builder /build/assets /app/assets
+COPY --from=builder /build/package.json /app/package.json
 
 # 软链 pi-web 全局包到 nx-as node_modules（import.meta.resolve 找祖先 node_modules）
 COPY --from=builder /usr/local/lib/node_modules/@agegr /app/node_modules/@agegr
