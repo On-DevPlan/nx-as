@@ -1,0 +1,158 @@
+name: Docker image
+
+# 镜像构建 → docker save 压缩包 → artifact；打了 v* tag 时顺带部署到 47 服务器（docker load，不走 registry）
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:        # 手动触发：只构建 + 上传 artifact，不部署
+    inputs:
+      deploy:
+        description: '同时部署到 47 服务器'
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    name: Build image & package
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 读版本号
+        id: meta
+        run: |
+          V=$(node -p "require('./package.json').version")
+          echo "version=$V" >> $GITHUB_OUTPUT
+          echo "image_tag=nx-as:$V" >> $GITHUB_OUTPUT
+          echo "构建 nx-as:$V"
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          load: true                       # 留在本地 docker 供 save（不 push）
+          tags: |
+            ${{ steps.meta.outputs.image_tag }}
+            nx-as:local
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 冒烟：容器能起、面板可达
+        run: |
+          set -e
+          docker run -d --name smoke -p 18443:8443 -e NX_AS_TOKEN=smoketoken nx-as:local
+          ok=false
+          for i in $(seq 1 45); do
+            if curl -fk -s https://127.0.0.1:18443/api/auth/verify >/dev/null 2>&1; then ok=true; break; fi
+            sleep 2
+          done
+          if [ "$ok" != true ]; then
+            echo "::error::容器 90s 内未就绪"
+            docker logs smoke --tail 80
+            docker rm -f smoke
+            exit 1
+          fi
+          echo "--- 鉴权面探活 ---"
+          curl -fk -s https://127.0.0.1:18443/api/auth/verify
+          echo
+          echo "--- 无 device token 应 401 ---"
+          code=$(curl -fk -s -o /dev/null -w '%{http_code}' https://127.0.0.1:18443/m/v1/sessions)
+          echo "HTTP $code"
+          docker rm -f smoke
+          [ "$code" = "401" ] || { echo "::error::网关未按预期拒绝匿名请求（$code）"; exit 1; }
+
+      - name: docker save + gzip
+        run: |
+          docker save ${{ steps.meta.outputs.image_tag }} | gzip -1 > nx-as-image.tar.gz
+          ls -lh nx-as-image.tar.gz
+          sha256sum nx-as-image.tar.gz | tee nx-as-image.tar.gz.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nx-as-image-${{ steps.meta.outputs.version }}
+          path: |
+            nx-as-image.tar.gz
+            nx-as-image.tar.gz.sha256
+            docker-compose.yml
+          retention-days: 30
+
+  deploy-47:
+    name: Deploy to 47 server
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.deploy == true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nx-as-image-${{ needs.build.outputs.image_tag }}
+          path: .
+
+      - name: 上传镜像包与 compose 到 47
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH47_HOST }}
+          username: ${{ secrets.SSH47_USER || 'root' }}
+          key: ${{ secrets.SSH47_KEY }}
+          port: ${{ secrets.SSH47_PORT || 22 }}
+          source: "nx-as-image.tar.gz,nx-as-image.tar.gz.sha256,docker-compose.yml"
+          target: "/opt/nx-as/"
+          timeout: 10m
+
+      - name: load 镜像 + 起服务 + 健康检查
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH47_HOST }}
+          username: ${{ secrets.SSH47_USER || 'root' }}
+          key: ${{ secrets.SSH47_KEY }}
+          port: ${{ secrets.SSH47_PORT || 22 }}
+          timeout: 10m
+          command_timeout: 15m
+          script: |
+            set -e
+            cd /opt/nx-as
+
+            # 校验包完整性（sha256 由 CI 生成）
+            sha256sum -c nx-as-image.tar.gz.sha256
+
+            echo "Loading image..."
+            gunzip -c nx-as-image.tar.gz | docker load
+
+            # compose 引用 nx-as:local（load 进来的 tag）
+            docker compose up -d --force-recreate
+
+            echo "健康检查..."
+            ok=false
+            for i in $(seq 1 60); do
+              if curl -fk -s https://127.0.0.1:8443/api/auth/verify >/dev/null 2>&1; then ok=true; break; fi
+              sleep 2
+            done
+            if [ "$ok" != true ]; then
+              echo "健康检查失败，容器日志："
+              docker compose logs --tail 100
+              exit 1
+            fi
+            echo "容器内探活 OK"
+            docker compose ps
+            rm -f nx-as-image.tar.gz
+
+      - name: 清理旧镜像（保留当前 + 最近一个）
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH47_HOST }}
+          username: ${{ secrets.SSH47_USER || 'root' }}
+          key: ${{ secrets.SSH47_KEY }}
+          port: ${{ secrets.SSH47_PORT || 22 }}
+          script: |
+            docker image prune -f || true
+            echo "已部署镜像："
+            docker images nx-as --format '{{.Repository}}:{{.Tag}} {{.Size}}' | head -5

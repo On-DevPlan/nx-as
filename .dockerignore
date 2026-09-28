@@ -1,0 +1,10 @@
+# 构建产物 / 本地运行残留
+node_modules/
+src/web/public/
+.tool/
+*.log
+
+# Docker 数据卷（部署机上的 ./data 不随仓库）
+docker/data/
+data/
+*.tar.gz

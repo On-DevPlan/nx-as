@@ -9,6 +9,8 @@ import { badInput, blocked, notFound } from '../../core/errors.js';
 import { appendAudit } from '../../core/audit.js';
 
 const NGINX_BIN = process.env.NXAS_NGINX_BIN || 'nginx';
+// 容器内以 root 直跑 nginx，无需 sudo（NXAS_NGINX_SUDO=0）；宿主机默认走 sudo -n 白名单
+const SUDO = process.env.NXAS_NGINX_SUDO === '0' ? [] : ['sudo', '-n'];
 const DEFAULT_MANAGED = '/etc/nginx/conf.d/nx-as-managed.conf';
 const NGINX_PORT_DEFAULT = 30141;
 
@@ -94,7 +96,10 @@ server {
 // ---------- 执行层（execFile 注入，测试可 mock） ----------
 
 let execFileImpl = null;
-async function run(cmd, args) {
+async function run(cmd, ...rest) {
+  // 支持 run(NGINX_BIN, ['-t']) 与 run(...SUDO, [NGINX_BIN, '-t']) 两种形态：
+  // rest 末尾必须是数组（真正的 args），前面的字符串是 sudo 前缀
+  const args = [...rest.filter((x) => typeof x === 'string'), ...rest.find((x) => Array.isArray(x)) || []];
   if (!execFileImpl) {
     execFileImpl = (await import('node:child_process')).execFile;
   }
@@ -132,7 +137,7 @@ export async function nginxStatus() {
 
   // nginx 进程/服务状态
   try {
-    const { stdout } = await run('systemctl', ['is-active', 'nginx']);
+    const { stdout } = await run(...(process.env.NXAS_NGINX_SUDO === '0' ? [NGINX_BIN, '-v'] : ['systemctl', 'is-active', 'nginx']));
     out.nginx = { service: stdout.trim() || 'unknown' };
   } catch (e) {
     out.nginx = { service: e.stdout?.trim() || 'inactive' };
@@ -151,7 +156,7 @@ export async function nginxStatus() {
 
   // sudoers 探测（能 -t 即视为授权）
   try {
-    await run('sudo', ['-n', NGINX_BIN, '-t']);
+    await run(...SUDO, [NGINX_BIN, '-t']);
     out.sudoers = 'ok';
   } catch (e) {
     out.sudoers = /sudo.*password|a password is required/i.test(e.stderr || '') ? 'needs-password' : 'no-sudoers';
@@ -193,7 +198,7 @@ export async function nginxApply(patch = {}, opts = {}) {
 
   // 3. nginx -t；失败回滚
   try {
-    await run('sudo', ['-n', NGINX_BIN, '-t']);
+    await run(...SUDO, [NGINX_BIN, '-t']);
   } catch (e) {
     try { await fsp.copyFile(bak, managedPath); } catch { /* 首次失败无备份可回滚 */ }
     throw Object.assign(new Error(`nginx -t 失败（已回滚）:\n${(e.stderr || e.stdout || e.message).trim()}`), { code: 'EXTERNAL' });
@@ -201,7 +206,7 @@ export async function nginxApply(patch = {}, opts = {}) {
 
   // 4. graceful reload
   try {
-    await run('sudo', ['-n', NGINX_BIN, '-s', 'reload']);
+    await run(...SUDO, [NGINX_BIN, '-s', 'reload']);
   } catch (e) {
     throw Object.assign(new Error(`配置已写入且校验通过，但 reload 失败:\n${(e.stderr || e.message).trim()}`), { code: 'EXTERNAL' });
   }
@@ -224,8 +229,8 @@ export async function nginxRollback() {
   }
   await fsp.copyFile(managedPath + '.bak', managedPath);
   try {
-    await run('sudo', ['-n', NGINX_BIN, '-t']);
-    await run('sudo', ['-n', NGINX_BIN, '-s', 'reload']);
+    await run(...SUDO, [NGINX_BIN, '-t']);
+    await run(...SUDO, [NGINX_BIN, '-s', 'reload']);
   } catch (e) {
     throw Object.assign(new Error(`回滚后 reload 失败:\n${(e.stderr || e.message).trim()}`), { code: 'EXTERNAL' });
   }

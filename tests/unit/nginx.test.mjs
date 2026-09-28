@@ -63,7 +63,6 @@ test('nginxApply: 写托管文件 + nginx -t 失败自动回滚 + 成功 reload'
     }
     return cb(null, '', '');
   });
-
   // 成功路径
   const r = await svc.nginxApply({});
   assert.equal(r.status, 'ok');

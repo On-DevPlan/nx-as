@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.1 (2026-09-28)
+
+单容器全内置镜像 + GitHub Actions 构建分发（docker save，不走 registry）。
+
+### Added
+
+- **Dockerfile**（node:22-alpine）：nginx（公网入口/TLS/auth_request 委托）+ nx-as（鉴权/面板）+ pi-web@0.9.3（会话运行时）三进程单容器；数据卷 `/data`（store/audit/pi-agent 会话与凭据）。
+- **`docker/entrypoint.sh`**：机机密码物化到 store（与 launcher 同源）→ 自签证书 → envsubst 渲染 nginx conf → `nx-as serve --with-web` 拉起 pi-web+网关 → nginx 前台。
+- **`docker/nginx.conf.template`**：与 `nx-as nginx apply` 托管模板同构的容器内版本。
+- **`docker-compose.yml`**：47 服务器部署件（8443 公网入口，7801 不映射；mem_limit 700m）。
+- **`.github/workflows/docker-image.yml`**：构建 → 容器冒烟（探活 + 匿名 401 断言）→ `docker save|gzip` → artifact；打 `v*` tag 时 SCP 到 47 服务器 `docker load` + compose up + 健康检查。
+- `NXAS_NGINX_SUDO=0`：容器内 root 直跑 nginx，跳过 sudo 前缀。
+
 ## 0.4.0 (2026-09-28)
 
 **auth_request 委托架构**：公网数据路径交给 nginx（SSE 直通），nx-as 瘦身为纯鉴权服务 + nginx 托管面板；鉴权逻辑与暴露方式分离，direct/nginx 双模式。

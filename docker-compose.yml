@@ -1,0 +1,19 @@
+# nx-as 单容器部署（47 服务器 /opt/nx-as/docker-compose.yml）
+# 镜像由 CI 构建经 docker save/load 分发（tag nx-as:local）
+services:
+  nx-as:
+    image: nx-as:local
+    container_name: nx-as
+    ports:
+      - "8443:8443"    # 公网入口（nginx TLS，自签证书）
+      # 7801/30141 不映射公网；调试用 ssh -L 7801:127.0.0.1:7801 root@47... 后访问 localhost:7801
+    volumes:
+      - ./data:/data   # store.json / audit.jsonl / pi-agent（会话+扩展+凭据）
+    environment:
+      NXAS_DOMAIN: ${NXAS_DOMAIN:-nx-as.local}
+      NX_AS_TOKEN: ${NX_AS_TOKEN:-}   # 管理密钥；留空则首启自动生成（docker logs 查看）
+    restart: unless-stopped
+    mem_limit: 700m
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
