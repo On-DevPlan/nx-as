@@ -43,10 +43,10 @@ if [ ! -f /etc/nginx/ssl/cert.pem ]; then
   echo "[entrypoint] 自签证书已生成（CN=${NXAS_DOMAIN:-nx-as.local}）"
 fi
 
-# ---------- 3. 渲染 nginx conf ----------
+# ---------- 3. 渲染 nginx conf（Alpine 的 http 上下文 include 是 http.d/） ----------
 export NXAS_MACHINE_B64=$(printf 'pi:%s' "$SECRET" | base64 | tr -d '\n')
 : "${NXAS_LISTEN_PORT:=8443}"
-envsubst '${NXAS_MACHINE_B64} ${NXAS_LISTEN_PORT}' < /etc/nginx/conf.d/nx-as.conf.template > /etc/nginx/conf.d/nx-as.conf
+envsubst '${NXAS_MACHINE_B64} ${NXAS_LISTEN_PORT}' < /etc/nginx/http.d/nx-as.conf.template > /etc/nginx/http.d/nx-as.conf
 nginx -t
 
 # ---------- 4. nx-as serve --with-web（pi-web + 网关 + 面板，后台） ----------
@@ -62,10 +62,15 @@ until wget -q -O /dev/null http://127.0.0.1:30141/api/web-auth 2>/dev/null; do
 done
 echo "[entrypoint] pi-web 已就绪或超时跳过"
 
-# ---------- 5. nginx 前台 ----------
+# ---------- 5. nginx 前台（ash 无 `wait -n`：轮询子进程存活） ----------
 echo "[entrypoint] nginx 监听 :${NXAS_LISTEN_PORT}"
 trap 'echo "[entrypoint] SIGTERM, shutting down"; kill $NXAS_PID 2>/dev/null; nginx -s quit 2>/dev/null; exit 0' TERM INT
 nginx -g "daemon off;" &
 NGINX_PID=$!
-wait -n $NGINX_PID $NXAS_PID 2>/dev/null || wait
-echo "[entrypoint] 子进程退出，容器结束"
+while kill -0 "$NXAS_PID" 2>/dev/null && kill -0 "$NGINX_PID" 2>/dev/null; do
+  sleep 5
+done
+echo "[entrypoint] 子进程退出（nxas=$NXAS_PID nginx=$NGINX_PID），容器结束"
+kill $NXAS_PID 2>/dev/null || true
+nginx -s quit 2>/dev/null || true
+exit 0
