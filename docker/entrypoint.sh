@@ -8,31 +8,14 @@ set -e
 DATA=/data
 mkdir -p "$DATA" "$DATA/pi-agent/extensions" "$DATA/pi-agent/skills"
 
-# ---------- 1. 机机密码（提前物化到 store，保证 nginx conf 与 launcher 同源） ----------
+# ---------- 1. 机机密码（物化到 store，保证 nginx conf 与 launcher 读同一个值） ----------
 export NX_AS_HOME=$DATA   # store = /data/store.json；Dockerfile 已设，这里显式兜底
-node --input-type=module -e "
-const { loadStore, mutateStore } = await import('file:///app/src/core/store.js');
-const s = await loadStore();
-if (!s.machineSecret) {
-  const { randomBytes } = await import('node:crypto');
-  const secret = randomBytes(32).toString('hex');
-  await mutateStore((st) => { st.machineSecret = secret; });
-  console.log('generated');
-} else {
-  console.log('exists');
-}
-" > /tmp/.secret-check 2>/dev/null || echo "failed" > /tmp/.secret-check
-cat /tmp/.secret-check
-
-# 读出密码渲染 nginx（store 读不到时退化临时密码——nginx 与 pi-web 将不一致，仅弱降级）
-SECRET=$(node --input-type=module -e "
-const { loadStore } = await import('file:///app/src/core/store.js');
-const s = await loadStore();
-console.log(s.machineSecret || '');
-" 2>/dev/null)
-if [ -z "$SECRET" ]; then
-  echo "[entrypoint] WARN: 无法读取 store，nginx Basic 用临时密码（pi-web 侧另随机）" >&2
-  SECRET=$(openssl rand -hex 32)
+# JS 独立成文件（docker/secret-init.mjs）：node -e 的多行脚本在 ash 下传递易被破坏
+SECRET=$(node /app/docker/secret-init.mjs 2>/tmp/secret-init.err)
+cat /tmp/secret-init.err >&2 2>/dev/null || true
+if [ ${#SECRET} -ne 64 ]; then
+  echo "[entrypoint] ERROR: machineSecret 异常（长度 ${#SECRET}，应为 64）——/data 是否可写？" >&2
+  exit 1
 fi
 
 # ---------- 2. 自签证书（挂卷 /etc/nginx/ssl 可替换为正式证书） ----------
@@ -44,9 +27,11 @@ if [ ! -f /etc/nginx/ssl/cert.pem ]; then
 fi
 
 # ---------- 3. 渲染 nginx conf（Alpine 的 http 上下文 include 是 http.d/） ----------
+# 注意：envsubst 只读「环境变量」，shell 里的普通赋值它看不见——两个变量都必须 export
 export NXAS_MACHINE_B64=$(printf 'pi:%s' "$SECRET" | base64 | tr -d '\n')
-: "${NXAS_LISTEN_PORT:=8443}"
+export NXAS_LISTEN_PORT="${NXAS_LISTEN_PORT:-8443}"
 envsubst '${NXAS_MACHINE_B64} ${NXAS_LISTEN_PORT}' < /etc/nginx/http.d/nx-as.conf.template > /etc/nginx/http.d/nx-as.conf
+echo "[entrypoint] nginx conf 已渲染（listen :${NXAS_LISTEN_PORT}）"
 nginx -t
 
 # ---------- 4. nx-as serve --with-web（pi-web + 网关 + 面板，后台） ----------

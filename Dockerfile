@@ -22,6 +22,7 @@ RUN npm install -g @agegr/pi-web@0.9.3 --no-audit --no-fund
 # 注意：Alpine nginx 的 http 上下文 include 是 /etc/nginx/http.d/*.conf；
 # conf.d/*.conf 在 main 上下文，放 server 块会报 "server directive is not allowed here"
 COPY docker/entrypoint.sh /entrypoint.sh
+COPY docker/secret-init.mjs /app/docker/secret-init.mjs
 COPY docker/nginx.conf.template /etc/nginx/http.d/nx-as.conf.template
 RUN chmod +x /entrypoint.sh && ln -sf /app/bin/nx-as.mjs /usr/local/bin/nx-as
 
