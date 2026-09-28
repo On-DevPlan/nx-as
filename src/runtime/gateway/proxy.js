@@ -14,7 +14,7 @@ import { randomBytes } from 'node:crypto';
 import { pairRedeem } from '../../modules/gateway/service.js';
 import { appendAudit } from '../../core/audit.js';
 import { issueTicket } from './tickets.js';
-import { retryAfterMs } from './throttle.js';
+import { retryAfterMs, recordFailure } from './throttle.js';
 import { decide } from './check.js';
 
 // ---------- 机机密码（serve 进程内随机；每进程轮换） ----------
