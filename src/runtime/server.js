@@ -18,6 +18,15 @@ export function startServer({ port = 7801, host = '127.0.0.1' } = {}) {
         const { handleAuthCheck } = await import('./gateway/check.js');
         return await handleAuthCheck(req, res, url);
       }
+      // 登录：POST 换会话 cookie；GET 渲染极简登录页（浏览器 /pi/ 401 时 302 过来）
+      if (url.pathname === '/auth/login' && req.method === 'POST') {
+        const { handleLogin } = await import('./gateway/session.js');
+        return await handleLogin(req, res);
+      }
+      if (url.pathname === '/login' && req.method === 'GET') {
+        const { handleLoginPage } = await import('./gateway/session.js');
+        return await handleLoginPage(req, res, url.searchParams.get('next') || '/');
+      }
       if (url.pathname.startsWith('/api/')) {
         const { handleApi } = await import('./api.js');
         return await handleApi(req, res, url);

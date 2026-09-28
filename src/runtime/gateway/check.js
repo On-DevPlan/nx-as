@@ -22,9 +22,9 @@ export function ticketFromUri(rawUri) {
 
 /**
  * 纯决策函数（无 HTTP 语义）。
- * @param {{authorization?: string, rawUri?: string, ip?: string}} input
+ * @param {{authorization?: string, cookieHeader?: string, rawUri?: string, ip?: string}} input
  */
-export async function decide({ authorization, rawUri, ip = 'unknown' }) {
+export async function decide({ authorization, cookieHeader, rawUri, ip = 'unknown' }) {
   // 节流前置查询（认证前按 IP）
   const ipBlock = retryAfterMs(`ip:${ip}`);
   if (ipBlock > 0) {
@@ -35,6 +35,13 @@ export async function decide({ authorization, rawUri, ip = 'unknown' }) {
   const ticket = ticketFromUri(rawUri);
   if (ticket && verifyTicket(ticket)) {
     return { decision: 'allow', device: { id: 'ticket', name: 'sse-ticket' } };
+  }
+
+  // 登录会话 cookie（浏览器场景：登录一次，同源请求自动携带）
+  const { sessionFromCookieHeader, verifySessionCookie } = await import('./session.js');
+  const sessionDeviceId = verifySessionCookie(sessionFromCookieHeader(cookieHeader));
+  if (sessionDeviceId) {
+    return { decision: 'allow', device: { id: sessionDeviceId, name: 'session' } };
   }
 
   // device token
@@ -61,13 +68,26 @@ export async function decide({ authorization, rawUri, ip = 'unknown' }) {
 export async function handleAuthCheck(req, res, url) {
   const rawUri = req.headers['x-original-uri'] || url.search || url.pathname || '';
   const ip = clientIpOf(req);
-  const r = await decide({ authorization: req.headers.authorization, rawUri, ip });
+  const r = await decide({
+    authorization: req.headers.authorization,
+    cookieHeader: req.headers.cookie,
+    rawUri,
+    ip,
+  });
   if (r.decision === 'allow') {
     res.writeHead(204, { 'X-Device-Id': r.device.id });
     res.end();
     return;
   }
   if (r.decision === 'deny-auth') {
+    // 浏览器页面请求（Accept: text/html）→ 302 到登录页（登录后回原路径）
+    const accept = req.headers.accept || '';
+    if (accept.includes('text/html')) {
+      const next = encodeURIComponent(rawUri || '/');
+      res.writeHead(302, { Location: `/login?next=${next}` });
+      res.end();
+      return;
+    }
     res.writeHead(401, { 'Retry-After': String(r.retryAfterSec) });
     res.end();
     return;
