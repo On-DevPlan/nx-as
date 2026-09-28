@@ -5,10 +5,10 @@ services:
     image: nx-as:local
     container_name: nx-as
     ports:
-      - "8443:8443"    # 公网入口（nginx TLS，自签证书）
+      - "8480:8443"    # 公网入口（nginx TLS，自签证书）；8443 在 47 上已被 gost 占用，外部用 8480
       # 7801/30141 不映射公网；调试用 ssh -L 7801:127.0.0.1:7801 root@47... 后访问 localhost:7801
     volumes:
-      - ./data:/data   # store.json / audit.jsonl / pi-agent（会话+扩展+凭据）
+      - ./data:/data              # 显式 bind mount：store.json / audit.jsonl / pi-agent 持久化
     environment:
       NXAS_DOMAIN: ${NXAS_DOMAIN:-nx-as.local}
       NX_AS_TOKEN: ${NX_AS_TOKEN:-}   # 管理密钥；留空则首启自动生成（docker logs 查看）
