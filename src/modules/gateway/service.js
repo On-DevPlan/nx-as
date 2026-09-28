@@ -89,33 +89,37 @@ export async function revokeDevice({ id }) {
 
 // ---------- 配对码 ----------
 
-// CLI 生成配对码：8 位数字，5 分钟有效、单次使用。存内存（进程内消费，重启即失效——
-// 配对是短窗操作，持久化反而扩大攻击面；pairCodes 由 runtime 层持有，serve 与 CLI 直连同进程）
-const pairCodes = new Map(); // code -> { deviceName, expiresAt, used }
-
-export function pairCreate({ name }) {
+// CLI 生成配对码：8 位数字，5 分钟有效、单次使用。
+// 存 store（而非进程内 Map）：CLI 与 serve 是两个进程，内存 Map 不共享会导致
+// CLI 签发的码在 serve 进程里永远兑换失败（v0.5.1 实测踩坑）。store 原子写
+// 单实例内安全；5 分钟 TTL + 兑换即删，攻击面与内存方案等价。
+export async function pairCreate({ name }) {
   if (!name || typeof name !== 'string' || name.length > 64) {
     throw badInput('缺少设备名 --name（64 字符内）');
   }
   const code = String(randomInt(0, 100_000_000)).padStart(8, '0');
-  pairCodes.set(code, { deviceName: name, expiresAt: Date.now() + PAIR_TTL_MS, used: false });
-  // 顺手清理过期码
-  for (const [k, v] of pairCodes) {
-    if (v.expiresAt < Date.now()) pairCodes.delete(k);
-  }
+  const rec = { deviceName: name, expiresAt: Date.now() + PAIR_TTL_MS };
+  await mutateStore((s) => {
+    s.pairCodes = (s.pairCodes || []).filter((p) => p.expiresAt > Date.now());
+    s.pairCodes.push({ code, ...rec });
+  });
   return { code, name, expiresInMs: PAIR_TTL_MS };
 }
 
 // HTTP 兑换：配对码 → 长期 token。错误统一抛 INVALID_INPUT（不区分「码错/过期/已用」，
 // 避免给猜码者反馈差异）。兑换成功即消费配对码。
 export async function pairRedeem({ code }) {
-  const rec = pairCodes.get(String(code || ''));
-  if (!rec || rec.used || rec.expiresAt < Date.now()) {
-    pairCodes.delete(String(code || ''));
-    throw badInput('配对码无效或已过期');
-  }
-  rec.used = true;
-  pairCodes.delete(String(code || ''));
+  const key = String(code || '');
+  let rec = null;
+  await mutateStore((s) => {
+    s.pairCodes = (s.pairCodes || []).filter((p) => p.expiresAt > Date.now());
+    const idx = s.pairCodes.findIndex((p) => p.code === key);
+    if (idx >= 0) {
+      rec = s.pairCodes[idx];
+      s.pairCodes.splice(idx, 1);   // 兑换即消费（原子：读-删-写在同一事务）
+    }
+  });
+  if (!rec) throw badInput('配对码无效或已过期');
   const r = await issueToken({ name: rec.deviceName });
   appendAudit({ action: 'device.pair_redeem', detail: { deviceId: r.device.id, name: r.device.name } }).catch(() => {});
   return r;
