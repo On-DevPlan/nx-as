@@ -104,6 +104,12 @@ export default function NginxView() {
       {msg && <Row label={msg.type === 'ok' ? '结果' : '错误'}><span className={msg.type === 'ok' ? '' : 'bad'} style={{ whiteSpace: 'pre-wrap' }}>{msg.text}</span></Row>}
 
       <Row label="">
+        <span className="mid">
+          默认 <strong>HTTP</strong>；如需 HTTPS：到「证书」页粘贴 CRT + KEY 导入，再到此处填 certPath / keyPath 并 Apply。
+        </span>
+      </Row>
+
+      <Row label="">
         <span className="mid">数据路径（/m/v1/*）由 nginx 直代 pi-web；鉴权经 auth_request 委托本服务 /auth/check。托管边界：仅 {status.managedPath} 一个文件。</span>
       </Row>
     </Card>

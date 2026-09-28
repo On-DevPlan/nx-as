@@ -29,6 +29,9 @@ const EMPTY = () => ({
     managedPath: '/etc/nginx/conf.d/nx-as-managed.conf',
     enabled: false,
   },
+  certs: {                  // 已导入的外部证书 metadata（cert/key 文件本身在 /etc/nginx/ssl）
+    leaf: null,              // { subject, issuer, notBefore, notAfter, fingerprintSha256, keyType, serialNumber, certPath, keyPath, importedAt }
+  },
 });
 
 function normalize(data) {
@@ -40,6 +43,9 @@ function normalize(data) {
   base.devices = Array.isArray(data.devices) ? data.devices : [];
   base.machineSecret = data.machineSecret || '';
   base.nginx = { ...base.nginx, ...(data.nginx || {}) };
+  base.certs = data.certs && typeof data.certs === 'object'
+    ? { ...base.certs, ...data.certs }
+    : base.certs;
   return base;
 }
 

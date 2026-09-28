@@ -1,13 +1,10 @@
-# nx-as 容器内 nginx 模板（entrypoint 用 envsubst 渲染 NXAS_MACHINE_B64 / NXAS_LISTEN_PORT）
-# 结构与 nx-as nginx apply 的托管模板一致；容器内由 root 直跑 nginx（无 sudo）
+# nx-as 容器内 nginx 模板（entrypoint 用 envsubst 渲染 NXAS_MACHINE_B64 / NXAS_LISTEN_PORT / NXAS_TLS_BLOCK）
+# 默认 HTTP；HTTPS 由外部证书导入后 entrypoint 注入 NXAS_TLS_BLOCK 启用
 
 server {
-    listen ${NXAS_LISTEN_PORT} ssl;
-    http2 on;
+    listen ${NXAS_LISTEN_PORT};
     server_name _;
-
-    ssl_certificate     /etc/nginx/ssl/cert.pem;
-    ssl_certificate_key /etc/nginx/ssl/key.pem;
+${NXAS_TLS_BLOCK}
 
     # ── 网关本地端点：配对与短票签发（自带校验，不走 auth_request）──
     location = /m/v1/pair {

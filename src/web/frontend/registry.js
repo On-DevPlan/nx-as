@@ -3,6 +3,7 @@
 
 export const VIEWS = {
   auth: () => import('../../modules/auth/view.jsx'),
+  cert: () => import('../../modules/cert/view.jsx'),
   nginx: () => import('../../modules/nginx/view.jsx'),
   settings: () => import('../../modules/settings/view.jsx'),
 };

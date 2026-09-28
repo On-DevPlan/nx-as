@@ -31,10 +31,30 @@ test('renderTemplate: 关键结构齐备（auth_request/直代/短票端点/SSE 
   assert.ok(t.includes('proxy_read_timeout 1h'), 'SSE 长连超时');
 });
 
-test('renderTemplate: 缺 domain/证书/密码 报 INVALID_INPUT', () => {
+test('renderTemplate: 缺 domain/密码 报 INVALID_INPUT；缺证书 → 默认 HTTP', () => {
   assert.throws(() => svc.renderTemplate({ ...CFG, domain: '' }, { machineSecret: 'S' }), (e) => e.code === 'INVALID_INPUT');
-  assert.throws(() => svc.renderTemplate({ ...CFG, certPath: '' }, { machineSecret: 'S' }), (e) => e.code === 'INVALID_INPUT');
   assert.throws(() => svc.renderTemplate(CFG, { machineSecret: '' }), (e) => e.code === 'INVALID_INPUT');
+});
+
+test('renderTemplate: 无证书 → 默认 HTTP listen 80（无 ssl_* 指令）', () => {
+  const cfgNoTls = { ...CFG, certPath: '', keyPath: '' };
+  const t = svc.renderTemplate(cfgNoTls, { machineSecret: 'S' });
+  assert.ok(t.includes('listen 80;'), '默认 HTTP listen 80');
+  assert.ok(!t.includes('ssl_certificate'), '无 ssl_certificate');
+  assert.ok(!t.includes('ssl_certificate_key'), '无 ssl_certificate_key');
+  assert.ok(!t.includes('listen 443 ssl'), '无 TLS listen');
+});
+
+test('renderTemplate: 仅 certPath 或仅 keyPath → 报 INVALID_INPUT', () => {
+  assert.throws(() => svc.renderTemplate({ ...CFG, keyPath: '' }, { machineSecret: 'S' }), (e) => e.code === 'INVALID_INPUT');
+  assert.throws(() => svc.renderTemplate({ ...CFG, certPath: '' }, { machineSecret: 'S' }), (e) => e.code === 'INVALID_INPUT');
+});
+
+test('renderTemplate: 有证书 → emit ssl_* 指令与 listen 443 ssl', () => {
+  const t = svc.renderTemplate({ ...CFG, certPath: '/c.pem', keyPath: '/k.pem' }, { machineSecret: 'S' });
+  assert.ok(t.includes('listen 443 ssl'), 'TLS listen');
+  assert.ok(t.includes('ssl_certificate     /c.pem;'), 'ssl_certificate 路径');
+  assert.ok(t.includes('ssl_certificate_key /k.pem;'), 'ssl_certificate_key 路径');
 });
 
 // ---------- apply 备份/回滚（mock sudo nginx 执行层，平台无关） ----------

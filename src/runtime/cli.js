@@ -4,7 +4,7 @@ import { VERSION } from '../core/version.js';
 import { ACTIONS } from '../index.js';
 
 export { VERSION };
-export const MODULE_IDS = ['auth', 'gateway', 'nginx', 'settings', 'system'];
+export const MODULE_IDS = ['auth', 'cert', 'gateway', 'nginx', 'settings', 'system'];
 
 // ---------- 平台命令（不属于任何业务域；与模块 action 合成同一张 ALL_COMMANDS） ----------
 

@@ -3,6 +3,7 @@ import { ACTIONS } from '../index.js';
 // 模块注册表：id ↔ 目录名一致；带 view 的模块必须有 view.jsx
 export const MODULES = [
   { id: 'auth', view: true },
+  { id: 'cert', view: true },
   { id: 'gateway', view: false },
   { id: 'nginx', view: true },
   { id: 'settings', view: true },

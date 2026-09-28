@@ -30,21 +30,29 @@ export async function machineSecret() {
 
 export function renderTemplate(cfg, { machineSecret: secret, gatewayPort = 7801, upstreamPort = NGINX_PORT_DEFAULT } = {}) {
   if (!cfg.domain) throw badInput('缺少 domain（公网域名）');
-  if (!cfg.certPath || !cfg.keyPath) throw badInput('缺少 TLS 证书路径（certPath/keyPath）');
   if (!secret) throw badInput('机机密码未生成（先 rotate-machine-secret 或 serve 一次）');
+
+  // TLS 可选：两个都给才 emit ssl_ 指令；半配报 INVALID_INPUT；都不给 = 默认 HTTP
+  const hasCert = !!(cfg.certPath || cfg.keyPath);
+  if (hasCert && !(cfg.certPath && cfg.keyPath)) {
+    throw badInput('certPath/keyPath 必须同时设置或同时留空');
+  }
+  const useTls = !!(cfg.certPath && cfg.keyPath);
+  const listenBlock = useTls
+    ? 'listen 443 ssl;\n    http2 on;'
+    : 'listen 80;';
+  const sslDirectives = useTls
+    ? `\n    ssl_certificate     ${cfg.certPath};\n    ssl_certificate_key ${cfg.keyPath};\n`
+    : '';
 
   return `# 本文件由 nx-as 托管生成（nx-as nginx apply）——手改会被下次 Apply 覆盖
 # 管理面板/CLI: nx-as nginx config / nginx apply
 
 server {
-    listen 443 ssl;
-    http2 on;
-    server_name ${cfg.domain};
+    ${listenBlock}
+    server_name ${cfg.domain};${sslDirectives}
 
-    ssl_certificate     ${cfg.certPath};
-    ssl_certificate_key ${cfg.keyPath};
-
-    # ── 网关本地端点：配对与短票签发（自带 Bearer/IP 校验，不走 auth_request）──
+    # ── 网关本地端点：配对与短票签发（自带校验，不走 auth_request）──
     location = /m/v1/pair {
         proxy_pass http://127.0.0.1:${gatewayPort};
         proxy_set_header X-Forwarded-For $remote_addr;
