@@ -16,7 +16,10 @@ RUN npm install --no-audit --no-fund \
     && npm prune --omit=dev
 
 # pi-web 固定版本装进全局（Next.js 全家桶 ~200MB，锁版本保证 gateway 契约）
-RUN npm install -g @agegr/pi-web@0.9.3 --no-audit --no-fund
+# import.meta.resolve 不读 NODE_PATH，只查祖先 node_modules；建软链让 nx-as（/app/）能找到
+RUN npm install -g @agegr/pi-web@0.9.3 --no-audit --no-fund \
+    && mkdir -p /app/node_modules \
+    && ln -sf /usr/local/lib/node_modules/@agegr /app/node_modules/@agegr
 
 # 容器部署件
 # 注意：Alpine nginx 的 http 上下文 include 是 /etc/nginx/http.d/*.conf；
