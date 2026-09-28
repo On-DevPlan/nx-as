@@ -50,6 +50,7 @@ EXPOSE 8443 7801
 
 ENV NXAS_NGINX_SUDO=0 \
     NX_AS_HOME=/data \
+    NX_AS_STORE=/data/store.json \
     PI_CODING_AGENT_DIR=/data/pi-agent \
     NODE_ENV=production
 
