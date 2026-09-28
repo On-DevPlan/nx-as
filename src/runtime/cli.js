@@ -4,7 +4,7 @@ import { VERSION } from '../core/version.js';
 import { ACTIONS } from '../index.js';
 
 export { VERSION };
-export const MODULE_IDS = ['auth', 'tasks', 'prompts', 'models', 'settings', 'system', 'plugins'];
+export const MODULE_IDS = ['auth', 'gateway', 'nginx', 'settings', 'system'];
 
 // ---------- 平台命令（不属于任何业务域；与模块 action 合成同一张 ALL_COMMANDS） ----------
 
@@ -21,22 +21,37 @@ async function cmdServe(ctx) {
   const { setRuntimeToken } = await import('./api.js');
   setRuntimeToken(token);
 
+  // 每次启动重写 Bearer 扩展（配置改了重启即生效）
+  const { writeBearerExtension, bearerConfig } = await import('../modules/gateway/extensions.js');
+  await writeBearerExtension().catch((e) => console.error('[nx-as] 生成 Bearer 扩展失败:', e.message));
+
   const displayHost = host === '0.0.0.0' ? '0.0.0.0' : host;
-  console.log(`面板:   http://${displayHost}:${port}`);
-  console.log(`控制台: http://${displayHost}:${port}/?token=${token}   (带密钥直达，手机可收藏)`);
+  console.log(`网关:   http://${displayHost}:${port}   (/m/v1/* 反代 pi-web，device token 鉴权)`);
+  console.log(`面板:   http://${displayHost}:${port}   (设备管理/设置，管理密钥)`);
+  console.log(`控制台: http://${displayHost}:${port}/?token=${token}   (带密钥直达，可收藏)`);
   console.log(`密钥:   ${token}`);
-  console.log(`(App/外部走 API 必须带 Authorization: Bearer <密钥>；/api/auth/verify 免密钥)`);
+  console.log(`(管理面 /api/* 走上述密钥；网关 /m/v1/* 走 device token：nx-as device pair --name <设备名>)`);
   // Bearer-auth 提示（从 store 读，面板/CLI 可配）
-  const { bearerConfig } = await import('../modules/tasks/runner.js');
   const bc = await bearerConfig();
   if (bc.token && bc.baseUrl) {
     console.log(`Bearer: ${bc.provider} → ${bc.baseUrl}  模型=${bc.models.join(',')}`);
   } else {
     console.log(`Bearer: (未配置；面板「设置」页或 nx-as settings set --bearer-base-url ... 配置后可用 Anthropic 兼容代理)`);
   }
+  console.log('提示:   模型/插件/技能管理在 pi-web 自带设置页（http://127.0.0.1:30141 或经网关 Web UI）；扩展装入 ~/.nx-as/pi-agent/extensions/');
+
+  // --with-web：顺带拉起 pi-web（安全启动器：随机 PI_WEB_PASSWORD，只听 127.0.0.1）
+  let webChild = null;
+  if (ctx['with-web']) {
+    const { spawnWeb } = await import('./launcher.js');
+    const r = await spawnWeb({ port: ctx['web-port'] ?? 30141 });
+    webChild = r?.child ?? null;
+  }
+
   if (!ctx['no-open'] && host !== '0.0.0.0') openBrowser(`http://127.0.0.1:${port}`);
 
   const shutdown = () => {
+    if (webChild) webChild.kill('SIGTERM');
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 1500).unref();
   };
@@ -45,39 +60,15 @@ async function cmdServe(ctx) {
   return new Promise(() => {}); // 常驻
 }
 
-// nx-as web：拉起 pi-web（@agegr/pi-web，MIT），PI_CODING_AGENT_DIR 指向 nx-as 的
-// 隔离目录 → 它的 89 组件生产级 UI（Markdown/KaTeX/Mermaid/diff/会话树/文件浏览）直接可用。
+// nx-as web：安全启动器，拉起 pi-web（@agegr/pi-web，MIT），PI_CODING_AGENT_DIR 指向 nx-as 的
+// 隔离目录 → 它的生产级 UI（Markdown/KaTeX/Mermaid/diff/会话树/文件浏览）直接可用。
+// PI_WEB_PASSWORD 每次启动随机生成注入（机机信任；本机直用时浏览器会要一次 Basic，
+// 用户名 pi 密码看启动日志——网关模式 --with-web 下用户永远不需要它）。
 // pi-web 不在 dependencies 里（重依赖，Next.js 全家桶）；缺的时候给出一条安装命令。
 async function cmdWeb(ctx) {
-  const { PI_AGENT_DIR } = await import('../core/paths.js');
-  const { spawn } = await import('node:child_process');
-
-  let resolved;
-  try {
-    resolved = await import.meta.resolve('@agegr/pi-web/bin/pi-web.js');
-  } catch {
-    resolved = null;
-  }
-  if (!resolved) {
-    console.log('pi-web 未安装。安装后重试（一次性，约 200MB 依赖）：');
-    console.log('  npm install -g @agegr/pi-web');
-    console.log('或直接运行：');
-    console.log(`  PI_CODING_AGENT_DIR="${PI_AGENT_DIR.replace(/\\/g, '/')}" npx @agegr/pi-web`);
-    return { status: 'blocked', note: 'pi-web 未安装' };
-  }
-
-  const port = ctx.port ?? 30141;
-  const binPath = new URL(resolved).pathname.replace(/^\/([A-Za-z]:)/, '$1');
-  const child = spawn(process.execPath, [binPath, '--no-open', '--port', String(port)], {
-    stdio: 'inherit',
-    env: { ...process.env, PI_CODING_AGENT_DIR: PI_AGENT_DIR },
-  });
-  console.log(`pi-web: http://127.0.0.1:${port}  (读取 ${PI_AGENT_DIR} 的会话/密钥/模型配置)`);
-  if (!ctx['no-open']) {
-    const { openBrowser } = await import('../core/open.js');
-    openBrowser(`http://127.0.0.1:${port}`);
-  }
-  child.on('exit', (code) => process.exit(code ?? 0));
+  const { spawnWeb } = await import('./launcher.js');
+  const r = await spawnWeb({ port: ctx.port ?? 30141, open: !ctx['no-open'] });
+  if (!r) return { status: 'blocked', note: 'pi-web 未安装' };
   return new Promise(() => {}); // 常驻，随子进程退出
 }
 
@@ -110,11 +101,13 @@ const BUILTINS = [
   {
     id: 'serve',
     cli: ['serve'],
-    summary: '启动 Web 面板 + API 服务',
+    summary: '启动鉴权网关（/m/v1 反代 pi-web）+ Web 面板 + 管理 API',
     flags: {
       port: { type: 'number', default: 7801 },
       host: { type: 'string', default: '127.0.0.1' },
       'no-open': { type: 'boolean' },
+      'with-web': { type: 'boolean' },
+      'web-port': { type: 'number' },
     },
     run: (ctx) => cmdServe(ctx),
     render: () => '',
@@ -122,7 +115,7 @@ const BUILTINS = [
   {
     id: 'web',
     cli: ['web'],
-    summary: '用 pi-web（生产级对话 UI）浏览 nx-as 会话',
+    summary: '只拉起 pi-web（安全启动器：随机 PI_WEB_PASSWORD，本机调试用）',
     flags: {
       port: { type: 'number', default: 30141 },
       'no-open': { type: 'boolean' },

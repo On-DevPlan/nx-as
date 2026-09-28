@@ -23,8 +23,6 @@ export default function SettingsView() {
     setSaved(false);
     try {
       const patch = {
-        maxConcurrent: Number(s.maxConcurrent),
-        autoRun: Boolean(s.autoRun),
         bearerProvider: s.bearerProvider,
         bearerBaseUrl: s.bearerBaseUrl,
         bearerModels: s.bearerModels,
@@ -55,19 +53,6 @@ export default function SettingsView() {
 
   return (
     <Card title="设置">
-      <Row label="并发数">
-        <Input value={String(s.maxConcurrent)} onChange={(v) => setS({ ...s, maxConcurrent: Number(v) || 1 })} />
-      </Row>
-      <Row label="创建即执行">
-        <input type="checkbox" checked={Boolean(s.autoRun)} onChange={(e) => setS({ ...s, autoRun: e.target.checked })} />
-        <span className="mid"> task add 后自动开始执行</span>
-      </Row>
-      <Row label="">
-        <Btn onClick={save}>保存</Btn>
-        {saved && <span className="tag strong">已保存</span>}
-      </Row>
-      {err && <Row label="错误"><span className="bad">{err}</span></Row>}
-
       <div className="colhead">Anthropic 兼容代理（MiniMax 等）</div>
       <Row label="provider">
         <Input value={s.bearerProvider} onChange={(v) => setS({ ...s, bearerProvider: v })} placeholder="MiniMax" />
@@ -87,8 +72,13 @@ export default function SettingsView() {
         {s.hasBearerToken && <button className="linkbtn" onClick={clearToken}>清除</button>}
       </Row>
       <Row label="">
+        <Btn onClick={save}>保存</Btn>
+        {saved && <span className="tag strong">已保存</span>}
+      </Row>
+      {err && <Row label="错误"><span className="bad">{err}</span></Row>}
+      <Row label="">
         <span className="mid">
-          配置保存后立即生效（nx-as 会重新生成 pi 扩展）。任务里用 <code>model: "{s.bearerProvider || 'MiniMax'}/模型ID"</code>
+          保存后 nx-as 重新生成 pi 扩展，pi-web 新会话即用新配置。模型/插件管理请用 pi-web 自带的设置页。
         </span>
       </Row>
     </Card>

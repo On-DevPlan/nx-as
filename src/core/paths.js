@@ -4,8 +4,6 @@ import { join, resolve, isAbsolute } from 'node:path';
 export const APP_NAME = 'nx-as';
 export const APP_DIR = join(homedir(), `.${APP_NAME}`);
 export const STORE_PATH = join(APP_DIR, 'store.json');
-export const PROMPTS_DIR = join(APP_DIR, 'prompts');
-export const WORKSPACES_DIR = join(APP_DIR, 'workspaces');
 // pi 的 agent 目录隔离在 nx-as 自己的目录下（auth.json / models.json / sessions 都在里面）
 export const PI_AGENT_DIR = join(APP_DIR, 'pi-agent');
 
@@ -16,18 +14,6 @@ export function storePathFromEnv() {
 
 export function appDirFromEnv() {
   return process.env.NX_AS_HOME || APP_DIR;
-}
-
-export function promptsDir() {
-  return process.env.NX_AS_STORE
-    ? join(resolve(storePathFromEnv(), '..'), 'prompts')
-    : PROMPTS_DIR;
-}
-
-export function workspacesDir() {
-  return process.env.NX_AS_STORE
-    ? join(resolve(storePathFromEnv(), '..'), 'workspaces')
-    : WORKSPACES_DIR;
 }
 
 // 名称校验：提示词名 / skill 名。只允许安全字符，防止路径穿越

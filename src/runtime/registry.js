@@ -3,12 +3,10 @@ import { ACTIONS } from '../index.js';
 // 模块注册表：id ↔ 目录名一致；带 view 的模块必须有 view.jsx
 export const MODULES = [
   { id: 'auth', view: true },
-  { id: 'tasks', view: true, resource: 'task' },
-  { id: 'prompts', view: true, resource: 'prompt' },
-  { id: 'models', view: true },
+  { id: 'gateway', view: false },
+  { id: 'nginx', view: true },
   { id: 'settings', view: true },
   { id: 'system', view: false },
-  { id: 'plugins', view: true },
 ];
 
 // 装载期自检：重复 id / 缺 cli / 缺 run / 路由重复 —— 启动瞬间失败

@@ -2,11 +2,8 @@ import { loadStore, mutateStore } from '../../core/store.js';
 import { badInput } from '../../core/errors.js';
 
 // 设置域：单例配置（settings.get / settings.set，不硬凑 CRUD）
+// 网关唯一关心的配置是 Bearer 代理（物化为 pi 扩展供 pi-web 使用）
 export const SETTABLE = [
-  'model',
-  'maxConcurrent',
-  'autoRun',
-  // Anthropic 兼容代理（MiniMax 等）的 Bearer 配置
   'bearerProvider',
   'bearerBaseUrl',
   'bearerModels',
@@ -21,7 +18,7 @@ export function maskSecrets(s) {
   return out;
 }
 
-// 内部用：拿原始设置（含真实 token，runner 用它生成扩展）
+// 内部用：拿原始设置（含真实 token，扩展生成用）
 export async function getRawSettings() {
   const store = await loadStore();
   return { ...store.settings };
@@ -41,8 +38,8 @@ export async function updateSettings(patch = {}) {
   await mutateStore((s) => {
     for (const k of keys) s.settings[k] = patch[k];
   });
-  // 配置变更后立刻重新生成 pi 扩展，下一个任务即生效
-  const { writeBearerExtension } = await import('../tasks/runner.js');
+  // 配置变更后立刻重新生成 pi 扩展，下一次 pi-web 会话即生效
+  const { writeBearerExtension } = await import('../gateway/extensions.js');
   await writeBearerExtension().catch(() => {});
   return getSettings();
 }

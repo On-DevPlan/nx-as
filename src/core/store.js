@@ -1,6 +1,6 @@
 import { fsp as _fsp } from './fs.js';
 import { storePathFromEnv } from './paths.js';
-import { join, resolve, dirname } from 'node:path';
+import { dirname } from 'node:path';
 
 export { dirname };
 
@@ -10,9 +10,6 @@ export const fsp = _fsp;
 const EMPTY = () => ({
   version: 1,
   settings: {
-    model: '',              // 默认模型，空 = pi 自己的默认
-    maxConcurrent: 2,       // 同时跑的任务数
-    autoRun: true,          // task add 后自动执行
     // Anthropic 兼容代理（MiniMax 等）的 Bearer 配置；
     // 留空则回落到环境变量 NXAS_BEARER_*
     bearerProvider: 'MiniMax',
@@ -23,7 +20,15 @@ const EMPTY = () => ({
   auth: {
     token: '',              // 空表示未设置；serve 启动时若无 token 则生成
   },
-  tasks: [],
+  devices: [],              // 网关设备 token（gateway 模块管理）
+  machineSecret: '',        // 机机密码（nginx 模板 Basic 注入；轮换走 nginx rotate-secret）
+  nginx: {                  // nginx 托管配置（nginx 模块管理）
+    domain: '',
+    certPath: '',
+    keyPath: '',
+    managedPath: '/etc/nginx/conf.d/nx-as-managed.conf',
+    enabled: false,
+  },
 });
 
 function normalize(data) {
@@ -32,7 +37,9 @@ function normalize(data) {
   base.version = data.version ?? 1;
   base.settings = { ...base.settings, ...(data.settings || {}) };
   base.auth = { ...base.auth, ...(data.auth || {}) };
-  base.tasks = Array.isArray(data.tasks) ? data.tasks : [];
+  base.devices = Array.isArray(data.devices) ? data.devices : [];
+  base.machineSecret = data.machineSecret || '';
+  base.nginx = { ...base.nginx, ...(data.nginx || {}) };
   return base;
 }
 
@@ -80,11 +87,4 @@ export async function mutateStore(fn, explicitPath) {
 export function resetStoreCache() {
   cache = null;
   cacheMtime = -1;
-}
-
-// 便捷：任务目录 <store 同级>/workspaces/<taskId>
-export function taskWorkspace(taskId, explicitPath) {
-  const p = explicitPath || storePathFromEnv();
-  const base = dirname(resolve(p));
-  return join(base, 'workspaces', taskId);
 }

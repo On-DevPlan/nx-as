@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.4.0 (2026-09-28)
+
+**auth_request 委托架构**：公网数据路径交给 nginx（SSE 直通），nx-as 瘦身为纯鉴权服务 + nginx 托管面板；鉴权逻辑与暴露方式分离，direct/nginx 双模式。
+
+### Added
+
+- **`/auth/check` 委托端点**：nginx `auth_request` 每请求子询问；决策逻辑抽入 `gateway/check.js`（direct/nginx 共享一份）。节流状态按 auth_request 契约以 403+Retry-After 表达。
+- **nginx 托管模块**（`src/modules/nginx/`）：模板渲染（auth_request + 直代 pi-web + SSE 不缓冲 + 签发端点直通）、Apply 流程（写 .new → 备份 .bak → `nginx -t` 失败自动回滚 → graceful reload）、配置漂移检测、sudoers 探测、`nx-as nginx setup` 部署引导、`rotate-secret` 机机密码原子轮换。
+- **面板「nginx」页**：状态卡（服务/漂移/授权）、domain/证书表单、高级模式（托管 conf textarea，仍有 nginx -t 兜底）、Apply/回滚/轮换按钮。
+- **机机密码持久化**：`store.machineSecret`（launcher 与 nginx 模板同源），首次 serve 自动生成。
+- 双模式：`NXAS_GW_MODE=nginx` 不挂进程内反代；`direct`（默认）行为不变。
+- 单测：nginx 模板结构断言 + Apply 备份/回滚全链路（mock 执行层，平台无关）。
+
+## 0.3.0 (2026-09-28)
+
+**彻底重构：nx-as → nx-apiserver（语义名）** —— 从嵌入式 pi 运行时转型为 pi-web 的鉴权代理网关 + 安全启动器。pi-web 成为会话运行时核心（零改动、锁版本），nx-as 不再内嵌 pi。
+
+### Added
+
+- **设备鉴权网关 `/m/v1/*`**：per-device token（`nxas_d1.<id>.<secret>`，sha256 落库、timing-safe 比较、可单独吊销、last_used 审计）；配对码签发（8 位数字、5 分钟、单次）；SSE 一次性短票（HMAC、60 秒、EventSource 无 header 场景）；认证失败指数退避限流（1s→60s、5 分钟静默清零、429 + Retry-After）；Host 白名单（`GW_ALLOWED_HOSTS`）+ Origin 跨站校验；全量审计落 `audit.jsonl`。
+- **安全启动器**：`nx-as serve --with-web` 一条命令拉起网关 + pi-web；`PI_WEB_PASSWORD` 每次启动随机生成注入（机机信任，人工密码退出 pi-web 侧）；网关反代自动注入 `Authorization: Basic pi:<机机密码>`。
+- **`nx-as device pair|list|revoke` 命令** + `GET /api/devices`、`POST /api/devices/:id/revoke` 管理路由。
+- gateway 单元测试（token/短票/节流）+ 网关 E2E（mock 上游 9 断言全绿）。
+
+### Removed（breaking）
+
+- **tasks 模块整体退役**：`task add/list/get/run/events/timeline` 命令、嵌入式 pi 运行时（runner）、任务事件 SSE 总线、面板时序瀑布图/trace 视图全部删除——会话执行改由 pi-web 承担。
+- `@earendil-works/pi-coding-agent` 依赖移除（保留轻量 `pi-ai` 供模型目录）；`core/events.js`、`taskWorkspace` 删除；store 结构 `tasks[]` → `devices[]`（旧 store.json 多余字段容忍读取）。
+
+### Changed
+
+- README/skill 文档重定位为「pi-web 鉴权代理网关」；`web` 命令升级为安全启动器（随机密码注入）。
+
 ## 0.2.2 (2026-09-27)
 
 pi-web 集成：生产级对话 UI 一条命令可达。

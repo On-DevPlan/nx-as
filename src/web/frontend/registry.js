@@ -3,9 +3,6 @@
 
 export const VIEWS = {
   auth: () => import('../../modules/auth/view.jsx'),
-  tasks: () => import('../../modules/tasks/view.jsx'),
-  prompts: () => import('../../modules/prompts/view.jsx'),
-  models: () => import('../../modules/models/view.jsx'),
+  nginx: () => import('../../modules/nginx/view.jsx'),
   settings: () => import('../../modules/settings/view.jsx'),
-  plugins: () => import('../../modules/plugins/view.jsx'),
 };

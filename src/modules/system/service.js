@@ -42,12 +42,10 @@ export async function bootstrapCli() {
 
 export async function health() {
   const store = await loadStore();
-  const { runningCount } = await import('../tasks/runner.js');
   return {
     ok: true,
     version: VERSION,
     storeReachable: Boolean(store),
-    tasksRunning: runningCount(),
     time: new Date().toISOString(),
   };
 }

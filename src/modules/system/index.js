@@ -19,9 +19,9 @@ const actions = [
     id: 'system.health',
     cli: ['health'],
     http: ['GET', '/api/health'],
-    summary: '存活 + 存储可达 + 执行中任务数',
+    summary: '存活 + 存储可达',
     run: () => health(),
-    render: (h) => `ok=${h.ok}  version=${h.version}  running=${h.tasksRunning}  store=${h.storeReachable}`,
+    render: (h) => `ok=${h.ok}  version=${h.version}  store=${h.storeReachable}`,
   },
   {
     id: 'system.routes',
