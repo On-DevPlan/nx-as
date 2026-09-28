@@ -47,10 +47,10 @@ jobs:
       - name: 冒烟：容器能起、面板可达
         run: |
           set +e   # 冒烟步骤禁用 -e：curl 4xx 是预期（匿名 401），用退出码断言
-          docker run -d --name smoke -p 18443:8443 -e NX_AS_TOKEN=smoketoken nx-as:local
+          docker run -d --name smoke -p 18080:8080 -e NX_AS_TOKEN=smoketoken nx-as:local
           ok=false
           for i in $(seq 1 60); do
-            code=$(curl -k -s -o /dev/null -w '%{http_code}' https://127.0.0.1:18443/api/auth/verify 2>/dev/null)
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/auth/verify 2>/dev/null)
             if [ "$code" = "200" ]; then ok=true; break; fi
             sleep 2
           done
@@ -61,9 +61,9 @@ jobs:
             exit 1
           fi
           echo "--- 鉴权面探活 ---"
-          curl -k -s https://127.0.0.1:18443/api/auth/verify; echo
+          curl -s http://127.0.0.1:18080/api/auth/verify; echo
           echo "--- 匿名 /m/v1/sessions 应 401 ---"
-          code=$(curl -k -s -o /dev/null -w '%{http_code}' https://127.0.0.1:18443/m/v1/sessions)
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/m/v1/sessions)
           echo "HTTP $code"
           docker logs smoke --tail 30   # 顺便看容器内 nx-as/pi-web 启动状态
           docker rm -f smoke
