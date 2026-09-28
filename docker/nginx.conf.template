@@ -4,6 +4,7 @@
 server {
     listen ${NXAS_LISTEN_PORT};
     server_name _;
+    absolute_redirect off;
 ${NXAS_TLS_BLOCK}
 
     # ── 网关本地端点：配对与短票签发（自带校验，不走 auth_request）──
@@ -66,6 +67,7 @@ ${NXAS_TLS_BLOCK}
     }
 
     # 未登录的浏览器页面请求 → 跳 nx-as 登录页（登录后回原路径）
+    # absolute_redirect off：保持相对 Location，避免把容器内端口(8080)拼进绝对 URL
     location @nxas_login {
         return 302 /login?next=$request_uri;
     }
