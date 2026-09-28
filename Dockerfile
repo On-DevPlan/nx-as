@@ -24,7 +24,9 @@ RUN npm install -g @agegr/pi-web@0.9.3 --no-audit --no-fund
 COPY docker/entrypoint.sh /entrypoint.sh
 COPY docker/secret-init.mjs /app/docker/secret-init.mjs
 COPY docker/nginx.conf.template /etc/nginx/http.d/nx-as.conf.template
-RUN chmod +x /entrypoint.sh && ln -sf /app/bin/nx-as.mjs /usr/local/bin/nx-as
+# npm prune 会清掉 npm 安装时设的可执行位；手动恢复（bin 脚本 + 启动器入口）
+RUN chmod +x /entrypoint.sh /app/bin/nx-as.mjs /app/docker/secret-init.mjs \
+    && ln -sf /app/bin/nx-as.mjs /usr/local/bin/nx-as
 
 # 数据卷：store.json / audit.jsonl / pi-agent（会话+扩展+凭据）
 VOLUME ["/data"]
