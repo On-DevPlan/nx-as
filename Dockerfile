@@ -1,40 +1,49 @@
 # nx-as 单容器全内置：nginx（公网入口）+ nx-as（鉴权/面板）+ pi-web（会话运行时）
+# 多阶段构建：builder 层装 devDeps + 跑面板 build + 装 pi-web；runtime 层只拷产物
 # 构建产物经 docker save 分发（不走 registry）
-FROM node:22-alpine
 
-# nginx + openssl（自签证书）+ tini（PID 1 信号转发）+ gettext（envsubst）
-RUN apk add --no-cache nginx openssl tini gettext ca-certificates \
-    && mkdir -p /run/nginx /etc/nginx/ssl /etc/nginx/http.d /data
+# ── Stage 1: builder ──────────────────────────────────────────────────
+FROM node:22-alpine AS builder
+RUN apk add --no-cache gettext ca-certificates
 
-WORKDIR /app
-
-# nx-as 本体：源码 → 全量依赖 → 构建面板 → 剔除 devDeps
+WORKDIR /build
 COPY package.json pnpm-lock.yaml* ./
 COPY . .
+
+# nx-as：全量依赖 → 构建面板 → 剔除 devDeps
 RUN npm install --no-audit --no-fund \
     && npm run build \
     && npm prune --omit=dev
 
-# pi-web 固定版本装进全局（Next.js 全家桶 ~200MB，锁版本保证 gateway 契约）
-# import.meta.resolve 不读 NODE_PATH，只查祖先 node_modules；建软链让 nx-as（/app/）能找到
-RUN npm install -g @agegr/pi-web@0.9.3 --no-audit --no-fund \
-    && mkdir -p /app/node_modules \
-    && ln -sf /usr/local/lib/node_modules/@agegr /app/node_modules/@agegr
+# pi-web 全局装（Next.js 全家桶 ~200MB；锁版本保证 gateway 契约）
+# import.meta.resolve 不读 NODE_PATH，建软链让 /app/src 能找到全局的 @agegr
+RUN npm install -g @agegr/pi-web@0.9.3 --no-audit --no-fund
+
+# ── Stage 2: runtime ──────────────────────────────────────────────────
+# alpine 基础镜像含 nginx + openssl + tini + gettext（用于 envsubst）
+# 不再装 npm/devDeps：nx-as runtime 只要 node + 全局 pi-web + 构建产物
+FROM node:22-alpine
+
+RUN apk add --no-cache nginx openssl tini gettext \
+    && mkdir -p /run/nginx /etc/nginx/ssl /etc/nginx/http.d /data
+
+# 拷贝 nx-as 构建产物（src + 已 prune 的 node_modules + bin + 面板 public）
+COPY --from=builder /build/bin /app/bin
+COPY --from=builder /build/src /app/src
+COPY --from=builder /build/node_modules /app/node_modules
+COPY --from=builder /build/assets /app/assets
+
+# 软链 pi-web 全局包到 nx-as node_modules（import.meta.resolve 找祖先 node_modules）
+COPY --from=builder /usr/local/lib/node_modules/@agegr /app/node_modules/@agegr
 
 # 容器部署件
-# 注意：Alpine nginx 的 http 上下文 include 是 /etc/nginx/http.d/*.conf；
-# conf.d/*.conf 在 main 上下文，放 server 块会报 "server directive is not allowed here"
 COPY docker/entrypoint.sh /entrypoint.sh
 COPY docker/secret-init.mjs /app/docker/secret-init.mjs
 COPY docker/nginx.conf.template /etc/nginx/http.d/nx-as.conf.template
-# npm prune 会清掉 npm 安装时设的可执行位；手动恢复（bin 脚本 + 启动器入口）
 RUN chmod +x /entrypoint.sh /app/bin/nx-as.mjs /app/docker/secret-init.mjs \
     && ln -sf /app/bin/nx-as.mjs /usr/local/bin/nx-as
 
-# 数据卷：store.json / audit.jsonl / pi-agent（会话+扩展+凭据）
 VOLUME ["/data"]
-
-# 8443 = nginx 公网入口（TLS）；7801 = nx-as 管理面（容器网络内；调试 ssh -L 映射）
 EXPOSE 8443 7801
 
 ENV NXAS_NGINX_SUDO=0 \
