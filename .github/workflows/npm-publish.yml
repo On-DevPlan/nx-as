@@ -56,6 +56,15 @@ jobs:
           git tag -a "${{ steps.pkg.outputs.tag }}" -m "Release ${{ steps.pkg.outputs.tag }}"
           git push origin "${{ steps.pkg.outputs.tag }}"
 
+      # GITHUB_TOKEN 推的 tag 事件**不会触发**其他 workflow（GitHub 已知限制），
+      # 所以 v* tag 上的 docker-image 构建不会被自动唤起——这里显式 dispatch 补上。
+      # deploy 保持 false：需要 47 部署时手动跑 docker-image（或给 deploy job 用 PAT 直连触发）。
+      - name: 触发镜像构建（tag 事件不会自动触发 workflow）
+        if: steps.check.outputs.tag_exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run "Docker image" --ref "${{ steps.pkg.outputs.tag }}"
+
       - name: 检查 NPM_TOKEN
         if: steps.check.outputs.published == 'false'
         env:

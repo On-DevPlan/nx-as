@@ -26,6 +26,8 @@ jobs:
     outputs:
       version: ${{ steps.meta.outputs.version }}
       image_tag: ${{ steps.meta.outputs.image_tag }}
+      full_image: ${{ steps.ghcr.outputs.full }}
+      base_image: ${{ steps.ghcr.outputs.base }}
     steps:
       - uses: actions/checkout@v4
 
@@ -193,27 +195,16 @@ jobs:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v') || inputs.deploy == true
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: nx-as-image-${{ needs.build.outputs.version }}
-          path: .
-
-      - name: 上传镜像包与 compose 到 47
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.SSH47_HOST }}
-          username: ${{ secrets.SSH47_USER || 'root' }}
-          key: ${{ secrets.SSH47_KEY }}
-          port: ${{ secrets.SSH47_PORT || 22 }}
-          source: "nx-as-image.tar.gz,nx-as-image.tar.gz.sha256,docker-compose.yml"
-          target: "/opt/nx-as/"
-          timeout: 10m
-
-      - name: load 镜像 + 起服务 + 健康检查
+      # 部署方式：47 **自己从 GHCR 拉镜像**（实测 47→ghcr.io 0.57s）。
+      # 不再 SCP 253MB 镜像包——CI runner → 47 的 scp-action 反复挂起（多次实测），
+      # 而 47 直连 GitHub 极快。compose 由本步骤生成（避免外挂旧文件造成版本漂移）。
+      - name: 47 拉镜像 + 起服务 + 健康检查
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          IMAGE: ${{ needs.build.outputs.full_image }}
+          VERSION: ${{ needs.build.outputs.version }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
         with:
           host: ${{ secrets.SSH47_HOST }}
           username: ${{ secrets.SSH47_USER || 'root' }}
@@ -221,19 +212,39 @@ jobs:
           port: ${{ secrets.SSH47_PORT || 22 }}
           timeout: 10m
           command_timeout: 15m
+          envs: IMAGE,VERSION,GHCR_USER,GHCR_TOKEN
           script: |
             set -e
             cd /opt/nx-as
+            mkdir -p data
 
-            # 校验包完整性（sha256 由 CI 生成）
-            sha256sum -c nx-as-image.tar.gz.sha256
+            # 拉取凭据：包为 public 时可留空 GHCR_PULL_TOKEN（匿名拉取）
+            if [ -n "$GHCR_TOKEN" ]; then
+              echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+            fi
 
-            echo "Loading image..."
-            gunzip -c nx-as-image.tar.gz | docker load
-            # artifact 内部 tag 随版本变（save 时打 nx-as:$version）；统一 retag 成 compose 引用的 local
-            docker tag nx-as:${{ needs.build.outputs.version }} nx-as:local
+            # compose 由 CI 生成（单一事实来源；不再从服务器外挂模板/compose）
+            cat > docker-compose.yml <<COMPOSE_EOF
+            services:
+              nx-as:
+                image: ${IMAGE}:${VERSION}
+                container_name: nx-as
+                ports:
+                  - "18080:8080"
+                volumes:
+                  - ./data:/data
+                environment:
+                  NX_AS_STORE: /data/store.json
+                  NX_AS_TOKEN: \${NX_AS_TOKEN:-}
+                restart: unless-stopped
+                mem_limit: 700m
+                logging:
+                  driver: json-file
+                  options: { max-size: "10m", max-file: "3" }
+            COMPOSE_EOF
 
-            # compose 引用 nx-as:local（load 进来的 tag）
+            echo "拉取 ${IMAGE}:${VERSION} ..."
+            docker compose pull
             docker compose up -d --force-recreate
 
             echo "健康检查..."
@@ -248,8 +259,8 @@ jobs:
               exit 1
             fi
             echo "容器内探活 OK"
+            curl -s http://127.0.0.1:18080/_nxas/api/auth/verify; echo
             docker compose ps
-            rm -f nx-as-image.tar.gz
 
       - name: 清理旧镜像（保留当前 + 最近一个）
         uses: appleboy/ssh-action@v1.0.3
@@ -261,4 +272,4 @@ jobs:
           script: |
             docker image prune -f || true
             echo "已部署镜像："
-            docker images nx-as --format '{{.Repository}}:{{.Tag}} {{.Size}}' | head -5
+            docker images ghcr.io --format '{{.Repository}}:{{.Tag}} {{.Size}}' | head -5 || true
