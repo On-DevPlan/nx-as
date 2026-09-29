@@ -51,7 +51,8 @@ jobs:
           ok=false
           for i in $(seq 1 60); do
             code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/auth/verify 2>/dev/null)
-            if [ "$code" = "200" ]; then ok=true; break; fi
+            # 200 = direct 直达；302 = nginx 模式匿名被引导登录页（服务就绪的另一种表现）
+            if [ "$code" = "200" ] || [ "$code" = "302" ]; then ok=true; break; fi
             sleep 2
           done
           if [ "$ok" != true ]; then
