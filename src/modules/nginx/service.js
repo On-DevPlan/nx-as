@@ -52,11 +52,7 @@ server {
     ${listenBlock}
     server_name ${cfg.domain};${sslDirectives}
 
-    # ── 网关本地端点：配对与短票签发（自带校验，不走 auth_request）──
-    location = /m/v1/pair {
-        proxy_pass http://127.0.0.1:${gatewayPort};
-        proxy_set_header X-Forwarded-For $remote_addr;
-    }
+    # ── 短票签发（自带校验，不走 auth_request）──
     location ~ ^/m/v1/sessions/[^/]+/ticket$ {
         proxy_pass http://127.0.0.1:${gatewayPort};
         proxy_set_header Authorization $http_authorization;

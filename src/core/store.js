@@ -21,7 +21,6 @@ const EMPTY = () => ({
     token: '',              // 空表示未设置；serve 启动时若无 token 则生成
   },
   devices: [],              // 网关设备 token（gateway 模块管理）
-  pairCodes: [],            // 配对码（5 分钟 TTL，兑换即删；CLI 与 serve 跨进程共享）
   machineSecret: '',        // 机机密码（nginx 模板 Basic 注入；轮换走 nginx rotate-secret）
   nginx: {                  // nginx 托管配置（nginx 模块管理）
     domain: '',
@@ -42,7 +41,6 @@ function normalize(data) {
   base.settings = { ...base.settings, ...(data.settings || {}) };
   base.auth = { ...base.auth, ...(data.auth || {}) };
   base.devices = Array.isArray(data.devices) ? data.devices : [];
-  base.pairCodes = Array.isArray(data.pairCodes) ? data.pairCodes : [];
   base.machineSecret = data.machineSecret || '';
   base.nginx = { ...base.nginx, ...(data.nginx || {}) };
   base.certs = data.certs && typeof data.certs === 'object'

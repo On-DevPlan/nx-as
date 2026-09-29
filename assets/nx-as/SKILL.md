@@ -1,6 +1,6 @@
 ---
 name: nx-as
-description: 当用户要"把 nx-as 作为鉴权网关跑 pi-web/管理设备 token/配置 Bearer 代理"，或提到 nx-as、npx-ai-server、nx-apiserver、个人 agent 网关、pi-web 代理、device token、配对码时使用。nx-as 是 pi-web 云端个人 agent 的鉴权代理网关（nx-apiserver 语义）：CLI 与管理 API 同源。不适用于：与 nx-as 无关的通用编程问题、Claude Code 自身配置。
+description: 当用户要"把 nx-as 作为鉴权网关跑 pi-web/管理设备 token/配置 Bearer 代理"，或提到 nx-as、npx-ai-server、nx-apiserver、个人 agent 网关、pi-web 代理、device token 时使用。nx-as 是 pi-web 云端个人 agent 的鉴权代理网关（nx-apiserver 语义）：CLI 与管理 API 同源。不适用于：与 nx-as 无关的通用编程问题、Claude Code 自身配置。
 ---
 
 # nx-as — pi-web 鉴权代理网关（nx-apiserver）
@@ -17,7 +17,7 @@ CLI 与管理 API 同源（一条 action 两端暴露）。
    （HTTP 409，CLI 退出码 1）。
 3. **两级凭据** — 管理面 `/api/*` 用单用户密钥（`Authorization: Bearer <token>`；token 来源：
    `--token` 参数 > `NX_AS_TOKEN` 环境变量 > serve 首次启动自动生成）；网关面 `/m/v1/*` 用
-   **per-device token**（`nx-as device pair` 配对签发，可单独吊销）；pi-web 的 `PI_WEB_PASSWORD`
+   **per-device token**（`nx-as device issue` 直接签发，可单独吊销）；pi-web 的 `PI_WEB_PASSWORD`
    由 serve 随机生成注入，永不出回环。
 
 ## 命令速查
@@ -26,7 +26,7 @@ CLI 与管理 API 同源（一条 action 两端暴露）。
 |---|---|
 | `nx-as serve [--port 7801] [--host 127.0.0.1] [--no-open] [--with-web]` | 起网关（`--with-web` 同时拉起 pi-web 并注入机机密码） |
 | `nx-as web [--port 30141] [--no-open]` | 只拉起 pi-web（安全启动器：随机 PI_WEB_PASSWORD + PI_CODING_AGENT_DIR） |
-| `nx-as device pair --name <设备名>` | 生成配对码（5 分钟/单次），设备用它在 `/m/v1/pair` 兑换 token |
+| `nx-as device issue --name <设备名>` | 直接签发 device token（管理员线下交付） |
 | `nx-as device list` / `device revoke <id>` | 设备清单 / 吊销（立即 401） |
 | `nx-as settings get` / `settings set [--bearer-base-url ... --bearer-token ... --bearer-models ...]` | Bearer 代理配置（物化为 pi 扩展） |
 | `nx-as auth status` / `auth rotate` | 管理密钥状态（掩码）/ 轮换 |
@@ -40,7 +40,7 @@ CLI 与管理 API 同源（一条 action 两端暴露）。
 
 | 场景 | 读 |
 |---|---|
-| 手机/设备接入：配对、`/m/v1/*` API、SSE 短票 | [references/01-gateway.md](01-gateway.md) |
+| 手机/设备接入：token 签发、`/m/v1/*` API、SSE 短票 | [references/01-gateway.md](01-gateway.md) |
 | Bearer 代理、装 pi 扩展/技能、权限扩展 | [references/03-extensions.md](03-extensions.md) |
 | 改代码、加功能域、理解分层 | [references/00-design.md](00-design.md) |
 

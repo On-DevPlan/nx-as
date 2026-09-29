@@ -3,17 +3,16 @@
 // 中间件顺序对齐 pi-web proxy.ts：
 //   ① source-check（Host 白名单，GW_ALLOWED_HOSTS 环境变量；默认仅 localhost/loopback/IP）
 //   ② 节流（认证前按 IP）
-//   ③ 路由白名单（/m/v1/pair 免 Bearer；SSE events 走短票）
+//   ③ 短票端点（SSE events 走一次性票）
 //   ④ device-auth（Bearer → store 校验）——决策逻辑在 check.js（与 nginx 模式的 /auth/check 共享）
 //   ⑤ 审计 + 反代（注入 Authorization: Basic pi:<机机密码>，机机密码与 pi-web PI_WEB_PASSWORD 同源）
 //
 // nginx 模式（NXAS_GW_MODE=nginx）下本模块不挂载：数据路径由 nginx 直代 pi-web，
 // nx-as 只暴露 /auth/check（check.js）与签发端点。
 import http from 'node:http';
-import { pairRedeem } from '../../modules/gateway/service.js';
 import { appendAudit } from '../../core/audit.js';
 import { issueTicket } from './tickets.js';
-import { retryAfterMs, recordFailure } from './throttle.js';
+import { retryAfterMs } from './throttle.js';
 import { decide } from './check.js';
 
 // ---------- 机机密码 ----------
@@ -97,11 +96,6 @@ async function _handleGateway(req, res, url) {
     return sendJson(res, 429, { ok: false, error: 'Too many failed attempts' }, { 'Retry-After': String(Math.max(1, Math.ceil(blockMs / 1000))) });
   }
 
-  // ③ 路由白名单
-  if (req.method === 'POST' && sub === '/pair') {
-    return handlePair(req, res, ip);
-  }
-
   // ④ device-auth（决策逻辑与 nginx 模式 /auth/check 同源：check.js）
   const r = await decide({ authorization: req.headers.authorization, rawUri: url.pathname + url.search, ip });
   if (r.decision === 'throttled') {
@@ -125,31 +119,6 @@ async function _handleGateway(req, res, url) {
   // ⑥ 审计 + 反代
   appendAudit({ action: 'gw.proxy', deviceId: device.id, detail: { method: req.method, path: url.pathname } }).catch(() => {});
   return proxyToUpstream(req, res, upstreamPath);
-}
-
-// ---------- 配对兑换（唯一免 Bearer 路由） ----------
-
-async function handlePair(req, res, ip) {
-  let body = '';
-  req.on('data', (c) => {
-    body += c;
-    if (body.length > 4096) req.destroy(); // 配对 body 不需要大
-  });
-  req.on('end', async () => {
-    let code = '';
-    try {
-      code = String(JSON.parse(body || '{}').code || '');
-    } catch { /* 落到下面统一报错 */ }
-    try {
-      const r = await pairRedeem({ code });
-      appendAudit({ action: 'gw.pair_ok', detail: { ip, deviceId: r.device.id } }).catch(() => {});
-      return sendJson(res, 200, r);
-    } catch {
-      const delay = recordFailure(`ip:${ip}`);
-      appendAudit({ action: 'gw.pair_fail', detail: { ip } }).catch(() => {});
-      return sendJson(res, 401, { ok: false, error: '配对码无效或已过期', code: 'UNAUTHORIZED' }, { 'Retry-After': String(Math.max(1, Math.ceil(delay / 1000))) });
-    }
-  });
 }
 
 // ---------- 反代（流式管道） ----------

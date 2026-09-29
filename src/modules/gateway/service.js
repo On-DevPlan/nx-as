@@ -1,13 +1,12 @@
-// 设备 token：签发 / 校验 / 吊销 + 配对码
+// 设备 token：直接签发 / 校验 / 吊销（无配对码——token 由管理员线下交付）
 // token 格式: nxas_d1.<deviceId>.<secret 64hex>
 // 存储: store.devices[] = { id, tokenHash(sha256(secret)), name, createdAt, lastUsedAt, revokedAt }
 // 明文 secret 只在签发响应里出现一次；校验走 timingSafeEqual（抗时序侧信道）
-import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { loadStore, mutateStore } from '../../core/store.js';
 import { badInput, notFound } from '../../core/errors.js';
 import { appendAudit } from '../../core/audit.js';
 
-const PAIR_TTL_MS = 5 * 60_000;
 
 function sha256(s) {
   return createHash('sha256').update(s, 'utf8').digest();
@@ -87,40 +86,3 @@ export async function revokeDevice({ id }) {
   return { status: 'ok', id };
 }
 
-// ---------- 配对码 ----------
-
-// CLI 生成配对码：8 位数字，5 分钟有效、单次使用。
-// 存 store（而非进程内 Map）：CLI 与 serve 是两个进程，内存 Map 不共享会导致
-// CLI 签发的码在 serve 进程里永远兑换失败（v0.5.1 实测踩坑）。store 原子写
-// 单实例内安全；5 分钟 TTL + 兑换即删，攻击面与内存方案等价。
-export async function pairCreate({ name }) {
-  if (!name || typeof name !== 'string' || name.length > 64) {
-    throw badInput('缺少设备名 --name（64 字符内）');
-  }
-  const code = String(randomInt(0, 100_000_000)).padStart(8, '0');
-  const rec = { deviceName: name, expiresAt: Date.now() + PAIR_TTL_MS };
-  await mutateStore((s) => {
-    s.pairCodes = (s.pairCodes || []).filter((p) => p.expiresAt > Date.now());
-    s.pairCodes.push({ code, ...rec });
-  });
-  return { code, name, expiresInMs: PAIR_TTL_MS };
-}
-
-// HTTP 兑换：配对码 → 长期 token。错误统一抛 INVALID_INPUT（不区分「码错/过期/已用」，
-// 避免给猜码者反馈差异）。兑换成功即消费配对码。
-export async function pairRedeem({ code }) {
-  const key = String(code || '');
-  let rec = null;
-  await mutateStore((s) => {
-    s.pairCodes = (s.pairCodes || []).filter((p) => p.expiresAt > Date.now());
-    const idx = s.pairCodes.findIndex((p) => p.code === key);
-    if (idx >= 0) {
-      rec = s.pairCodes[idx];
-      s.pairCodes.splice(idx, 1);   // 兑换即消费（原子：读-删-写在同一事务）
-    }
-  });
-  if (!rec) throw badInput('配对码无效或已过期');
-  const r = await issueToken({ name: rec.deviceName });
-  appendAudit({ action: 'device.pair_redeem', detail: { deviceId: r.device.id, name: r.device.name } }).catch(() => {});
-  return r;
-}

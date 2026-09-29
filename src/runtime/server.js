@@ -10,7 +10,7 @@ import http from 'node:http';
 //   /_nxas/auth/login  POST  登录换会话 cookie
 //   /_nxas/login   GET      登录页（?next= 回跳）
 //   /_nxas/api/*             nx-as 管理面 API（设备/nginx/证书/settings）
-//   /_nxas/m/v1/*            手机 API（pair、ticket、sessions、agent…）
+//   /_nxas/m/v1/*            手机 API（ticket、sessions、agent…）
 //
 // direct 模式路径不变：/api/*、/m/v1/*、/auth/check、/login（无前缀，向后兼容）。
 export function gwMode() {
@@ -52,7 +52,7 @@ export function startServer({ port = 7801, host = '127.0.0.1' } = {}) {
           const { handleApi } = await import('./api.js');
           return await handleApi(req, res, innerUrl);
         }
-        // 手机 API 与签发端点：/m/v1/* 全量走 gateway 逻辑（pair/ticket/反代……）
+        // 手机 API：/m/v1/* 全量走 gateway 逻辑（ticket/反代……）
         // 注意：nginx 模式下 gateway 的反代目标也是 pi-web /api/*，与 direct 一致
         if (inner === '/m/v1' || inner.startsWith('/m/v1/')) {
           const { handleGateway } = await import('./gateway/proxy.js');

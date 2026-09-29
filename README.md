@@ -2,12 +2,12 @@
 
 [pi-web](https://github.com/agegr/pi-web)（pi coding agent 的 Web UI）的**鉴权服务 + 安全启动器 + nginx 管理面板**：
 pi-web 跑在云端作为你的个人 agent 会话运行时（零改动），公网入口由 **nginx** 直代（数据路径），
-每个请求经 `auth_request` **委托 nx-as 做鉴权**——设备级 token、配对签发、限流、审计，全部独立在网关层。
+每个请求经 `auth_request` **委托 nx-as 做鉴权**——设备级 token 签发/吊销、限流、审计，全部独立在网关层。
 
 ```
 公网 :443
    ▼
-nginx ─── /m/v1/pair、/ticket ─────────► nx-as :7801（签发类端点）
+nginx ─── /_nxas/m/v1/*（手机 API）─────► nx-as :7801（鉴权+转发）
    │
    ├──── /m/v1/* ── auth_request 子请求 ► nx-as /auth/check（只问"行不行"）
    │            └── proxy_pass ────────► pi-web :30141（SSE 直通，数据不过 nx-as）
@@ -32,8 +32,8 @@ export NX_AS_TOKEN=管理密钥
 手机端三个动作就够：
 
 ```bash
-# 1. 服务器上生成配对码（5 分钟有效、单次）
-nx-as device pair --name "我的手机"
+# 1. 服务器上直接签发 device token（SSH 执行）
+nx-as device issue --name "我的手机"
 
 # 2. 手机用配对码兑换长期 device token（唯一免鉴权的网关路由）
 curl -X POST https://your-server/m/v1/pair -H "Content-Type: application/json" \
@@ -51,7 +51,6 @@ curl -H "Authorization: Bearer nxas_d1..." https://your-server/m/v1/sessions
 
 | 网关路由 | 上游（pi-web） | 说明 |
 |---|---|---|
-| `POST /m/v1/pair` | —（网关本地） | 配对码兑 device token（免 Bearer，受限流保护） |
 | `GET /m/v1/sessions` | `/api/sessions` | 会话列表 |
 | `POST /m/v1/agent/new` | `/api/agent/new` | 建会话/发首条 prompt |
 | `POST /m/v1/agent/:id` | `/api/agent/:id` | 会话命令（prompt/steer/follow_up…） |
@@ -67,7 +66,7 @@ SSE 用 EventSource 连接时不能带自定义 header：先 `POST /m/v1/session
 |---|---|
 | `nx-as serve [--port 7801] [--host] [--with-web] [--web-port]` | 起网关 + 面板；`--with-web` 同时拉起 pi-web 并注入随机 `PI_WEB_PASSWORD` |
 | `nx-as web [--port 30141]` | 只拉起 pi-web（安全启动器，本机调试用） |
-| `nx-as device pair --name <设备名>` | 生成配对码 |
+| `nx-as device issue --name <设备名>` | 直接签发 device token（线下交付） |
 | `nx-as device list` / `device revoke <id>` | 设备清单 / 吊销（下一次请求即 401） |
 | `nx-as nginx status` / `config [--preview]` / `apply` / `rollback` / `setup` / `rotate-secret` | nginx 托管：状态/配置/应用（nginx -t+reload）/回滚/部署引导/轮换机机密码 |
 | `nx-as settings get/set` | Bearer 代理配置（物化为 pi 扩展） |
@@ -83,7 +82,7 @@ SSE 用 EventSource 连接时不能带自定义 header：先 `POST /m/v1/session
 
 | 面 | 凭据 | 特性 |
 |---|---|---|
-| 网关 `/m/v1/*`（手机/外部设备） | per-device token | 可单独吊销、last_used 可审计 |
+| 网关 `/_nxas/m/v1/*`（手机/外部设备） | per-device token | 可单独吊销、last_used 可审计 |
 | 管理面 `/api/*`（本机面板/CLI） | 单用户密钥 | `NX_AS_TOKEN` 或自动生成 |
 | pi-web（回环） | 机机 Basic | serve 启动随机生成，不落盘不打印，人工密码消失 |
 

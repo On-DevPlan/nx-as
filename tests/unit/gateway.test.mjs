@@ -47,20 +47,6 @@ test('device token: 未知名/超长名拒绝', async () => {
   await assert.rejects(() => svc.issueToken({ name: 'x'.repeat(65) }), (e) => e.code === 'INVALID_INPUT');
 });
 
-test('pair: 创建→兑换→重放拒绝', async () => {
-  resetStoreCache();
-  const { code } = svc.pairCreate({ name: 'pair-unit' });
-  assert.match(code, /^\d{8}$/);
-
-  const r = await svc.pairRedeem({ code });
-  assert.ok(r.token.startsWith('nxas_d1.'));
-
-  // 重放 / 错码统一 INVALID_INPUT（不区分原因）
-  await assert.rejects(() => svc.pairRedeem({ code }), (e) => e.code === 'INVALID_INPUT');
-  await assert.rejects(() => svc.pairRedeem({ code: '99999999' }), (e) => e.code === 'INVALID_INPUT');
-  await assert.rejects(() => svc.pairRedeem({}), (e) => e.code === 'INVALID_INPUT');
-});
-
 // ---------- SSE 短票 ----------
 
 test('短票: 有效一次、过期拒、篡改拒、格式拒', async () => {

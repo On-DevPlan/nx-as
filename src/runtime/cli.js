@@ -30,7 +30,7 @@ async function cmdServe(ctx) {
   console.log(`面板:   http://${displayHost}:${port}   (设备管理/设置，管理密钥)`);
   console.log(`控制台: http://${displayHost}:${port}/?token=${token}   (带密钥直达，可收藏)`);
   console.log(`密钥:   ${token}`);
-  console.log(`(管理面 /api/* 走上述密钥；网关 /m/v1/* 走 device token：nx-as device pair --name <设备名>)`);
+  console.log(`(管理面 /api/* 走上述密钥；网关 /_nxas/m/v1/* 走 device token：nx-as device issue --name <设备名>)`);
   // Bearer-auth 提示（从 store 读，面板/CLI 可配）
   const bc = await bearerConfig();
   if (bc.token && bc.baseUrl) {

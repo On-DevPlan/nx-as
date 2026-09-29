@@ -4,7 +4,7 @@
 
 ```
 手机 / PWA / curl
-    │  Bearer <device token>        ← nx-as device pair 签发，可吊销
+    │  Bearer <device token>        ← nx-as device issue 签发，可吊销
     ▼
 nx-as serve :7801（网关）
     │  /m/v1/*  鉴权（source-check → 节流 → device-auth → 审计）
@@ -16,19 +16,14 @@ pi-web（零改动，锁版本）──▶ pi SDK + ~/.nx-as/pi-agent/extensions
 - 管理面 `/api/*`（Web 面板 + CLI）走单用户密钥，与网关面 `/m/v1/*`（device token）互不相通。
 - pi-web 的 `PI_WEB_PASSWORD` 由 serve 自动生成注入；公网流量物理上只能过网关。
 
-## 设备配对
+## 设备接入（token 直接签发）
 
 ```bash
-nx-as device pair --name "我的手机"     # → 8 位配对码，5 分钟有效、单次使用
-```
-
-```bash
-# 设备侧：用配对码兑换长期 token（唯一免 Bearer 的路由）
-curl -X POST https://your-server:7801/m/v1/pair \
-  -H "Content-Type: application/json" \
-  -d '{"code":"12345678"}'
-# → {"token":"nxas_d1.<id>.<secret>", "device":{"id":...,"name":"我的手机"}}
-# secret 只出现这一次，客户端自行安全存储
+# 管理员：直接签发 token（SSH 到服务器执行）
+nx-as device issue --name "我的手机"
+# → token: nxas_d1.<id>.<secret 64hex>
+#   secret 只出现这一次，经安全渠道交付给设备（加密消息/密码管理器）
+#   泄露即吊销：nx-as device revoke dev_xxx，重签一个即可
 ```
 
 ```bash
@@ -42,7 +37,6 @@ nx-as device revoke dev_xxx  # 吊销，下一次请求即 401
 
 | 端点 | 上游（pi-web） | 说明 |
 |---|---|---|
-| `POST /m/v1/pair` | —（网关本地） | 免 Bearer；配对码兑 token |
 | `GET /m/v1/sessions` | `/api/sessions?summary=1` | 会话列表（侧栏元数据） |
 | `POST /m/v1/agent/new` | `/api/agent/new` | 建会话/发首条 prompt |
 | `POST /m/v1/agent/:id` | `/api/agent/:id` | 会话命令（prompt/steer/follow_up…） |

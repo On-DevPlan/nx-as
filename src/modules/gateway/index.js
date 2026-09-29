@@ -1,15 +1,15 @@
-import { pairCreate, listDevices, revokeDevice } from './service.js';
+import { issueToken, listDevices, revokeDevice } from './service.js';
 
 const actions = [
   {
-    id: 'gateway.pair',
-    cli: ['device', 'pair'],
-    http: null, // 兑换走 /m/v1/pair（网关自管路由），此处只发码
-    summary: '生成设备配对码（5 分钟有效、单次；设备用它兑换 device token）',
+    id: 'gateway.deviceIssue',
+    cli: ['device', 'issue'],
+    http: null, // token 经线下安全渠道交付（SSH/加密消息）；不暴露 HTTP 签发面
+    summary: '直接签发 device token（管理员操作；token 明文只出现这一次）',
     flags: { name: { type: 'string', required: true } },
-    run: (ctx) => pairCreate({ name: ctx.name }),
+    run: (ctx) => issueToken({ name: ctx.name }),
     render: (r) =>
-      `配对码: ${r.code}\n设备:   ${r.name}\n有效:   5 分钟内、单次使用\n设备端: curl -X POST http://<host>:7801/m/v1/pair -H "Content-Type: application/json" -d '{"code":"${r.code}"}'`,
+      `设备:   ${r.device.name} (${r.device.id})\ntoken:  ${r.token}\n\n交付给设备后即用：Authorization: Bearer ${r.token.slice(0, 20)}...`,
   },
   {
     id: 'gateway.deviceList',
@@ -25,7 +25,7 @@ const actions = [
                 `${d.id.padEnd(18)}  ${d.name.padEnd(16)}  ${d.revoked ? 'revoked' : 'active'}  last_used=${d.lastUsedAt ? new Date(d.lastUsedAt).toISOString() : 'never'}`,
             )
             .join('\n')
-        : '(无设备；nx-as device pair --name <名> 生成配对码)',
+        : '(无设备；nx-as device issue --name <名> 直接签发 token)',
   },
   {
     id: 'gateway.deviceRevoke',

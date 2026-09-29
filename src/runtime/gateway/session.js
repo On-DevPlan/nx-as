@@ -110,7 +110,7 @@ button{width:100%;padding:10px;background:#1a1a1a;color:#fff;border:0;border-rad
 .err{color:#c0392b;font-size:14px;min-height:20px} .hint{color:#888;font-size:12px;margin-top:16px}
 </style></head><body>
 <h2>nx-as 登录</h2>
-<p class="hint">粘贴 device token（nxas_d1....，由管理员 nx-as device pair 签发）</p>
+<p class="hint">粘贴 device token（nxas_d1....，由管理员 nx-as device issue 签发）</p>
 <input id="t" placeholder="nxas_d1.xxxxxxxx.yyy..." autocomplete="off">
 <button onclick="doLogin()">登录</button>
 <div class="err" id="e"></div>
