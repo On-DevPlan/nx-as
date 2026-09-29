@@ -86,7 +86,9 @@ button{width:100%;padding:10px;background:#1a1a1a;color:#fff;border:0;border-rad
 async function doLogin(){
   const e=document.getElementById('e'); e.textContent='';
   try{
-    const r=await fetch('/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:document.getElementById('t').value.trim()})});
+    // nginx 模式部署在 /_nxas/ 前缀下：登录 API 走同前缀；直连 7801 / direct 模式不变
+    const base = location.pathname.startsWith('/_nxas') ? '/_nxas' : '';
+    const r=await fetch(base+'/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:document.getElementById('t').value.trim()})});
     if(!r.ok){const j=await r.json().catch(()=>({})); e.textContent=j.error||('HTTP '+r.status); return;}
     location.href=${JSON.stringify(safeNext)};
   }catch(err){e.textContent=String(err)}
