@@ -54,18 +54,18 @@ jobs:
           echo "base=ghcr.io/${OWNER}/nx-as-base" >> $GITHUB_OUTPUT
           echo "full=ghcr.io/${OWNER}/nx-as" >> $GITHUB_OUTPUT
 
-      # ── base：纯权限壳。单独一步构建，保证 base 产物不依赖 pi-web 层 ──
-      - name: Build & push base 镜像（无主程序）
+      # ── base：纯权限壳。先本地构建 + 冒烟，通过后才推 GHCR ──
+      # 注意：不能在同一 build-push-action 里混「本地 tag + GHCR tag + push:true」——
+      # buildx 会把 nx-as-base:local 当成 Docker Hub 的 library/nx-as-base 去推（实测 401）。
+      - name: Build base 镜像（本地，供冒烟）
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
           target: base
-          load: true                       # 留在本地供冒烟（不 push 时也能测）
-          push: true
+          load: true
+          push: false
           tags: |
-            ${{ steps.ghcr.outputs.base }}:${{ steps.meta.outputs.version }}
-            ${{ steps.ghcr.outputs.base }}:latest
             nx-as-base:${{ steps.meta.outputs.version }}
             nx-as-base:local
           cache-from: type=gha,scope=base
@@ -91,28 +91,34 @@ jobs:
           curl -s http://127.0.0.1:18090/_nxas/api/auth/verify; echo
           echo "--- base 日志应含「纯权限壳模式」 ---"
           docker logs smoke-base 2>&1 | grep -q '纯权限壳模式' || { echo "::error::base 未进入纯权限壳模式"; docker logs smoke-base --tail 30; docker rm -f smoke-base; exit 1; }
-          echo "--- 匿名 /（无主进程 → 502/302 均可，不可 500 崩溃）---"
+          echo "--- 匿名 /（无主进程 → 502/302 均可，不可无响应）---"
           code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Accept: text/html' http://127.0.0.1:18090/)
           echo "HTTP $code"
           docker rm -f smoke-base
           [ "$code" != "000" ] || { echo "::error::base 匿名 / 无响应"; exit 1; }
           echo "✅ base 镜像契约通过（网关就绪 + 纯权限壳模式）"
 
+      - name: 推 base 到 GHCR
+        run: |
+          docker tag nx-as-base:${{ steps.meta.outputs.version }} ${{ steps.ghcr.outputs.base }}:${{ steps.meta.outputs.version }}
+          docker tag nx-as-base:${{ steps.meta.outputs.version }} ${{ steps.ghcr.outputs.base }}:latest
+          docker push ${{ steps.ghcr.outputs.base }}:${{ steps.meta.outputs.version }}
+          docker push ${{ steps.ghcr.outputs.base }}:latest
+
       # ── full：base + pi-web。与 base 共享缓存，只多 pi-web 层 ──
-      - name: Build & push full 镜像（base + pi-web）
+      - name: Build full 镜像（本地，供冒烟）
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
           target: full
           load: true
-          push: true
+          push: false
           tags: |
-            ${{ steps.ghcr.outputs.full }}:${{ steps.meta.outputs.version }}
-            ${{ steps.ghcr.outputs.full }}:latest
-            ${{ steps.meta.outputs.image_tag }}
+            nx-as:${{ steps.meta.outputs.version }}
             nx-as:local
           cache-from: type=gha,scope=full
+          cache-from: type=gha,scope=base
           cache-to: type=gha,mode=max,scope=full
 
       - name: 冒烟：full 镜像（容器能起、面板可达、路径契约）
@@ -148,6 +154,13 @@ jobs:
           [ "$code" = "302" ] || { echo "::error::匿名 / 应 302 登录页，实得 $code"; exit 1; }
           [ "$code2" = "401" ] || { echo "::error::匿名 API 应 401，实得 $code2"; exit 1; }
           echo "✅ full 镜像契约验证通过（/ → 302 登录页；/_nxas/m/v1 → 401）"
+
+      - name: 推 full 到 GHCR
+        run: |
+          docker tag nx-as:${{ steps.meta.outputs.version }} ${{ steps.ghcr.outputs.full }}:${{ steps.meta.outputs.version }}
+          docker tag nx-as:${{ steps.meta.outputs.version }} ${{ steps.ghcr.outputs.full }}:latest
+          docker push ${{ steps.ghcr.outputs.full }}:${{ steps.meta.outputs.version }}
+          docker push ${{ steps.ghcr.outputs.full }}:latest
 
       - name: 打印 GHCR 推送结果
         run: |
