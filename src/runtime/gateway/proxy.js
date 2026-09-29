@@ -107,27 +107,45 @@ async function _handleGateway(req, res, url) {
   const device = r.device;
 
   // SSE 短票换取端点：POST /m/v1/sessions/:id/ticket（Bearer 已在上面验过）
+  //
+  // basePath 是**客户端看到的前缀**（见 server.js）：nginx 模式为 '/_nxas'，direct 模式为空。
+  // 回给客户端的 url 必须带这个前缀，否则手机端拿到 /m/v1/... 会打到根路径
+  // （nginx 模式下落到 pi-web 登录页，表现为「跟随后拿到 200 text/html」的假成功）。
   const ticketMatch = /^\/sessions\/([^/]+)\/ticket$/.exec(sub);
   if (req.method === 'POST' && ticketMatch) {
-    const ticket = issueTicket();
+    const basePath = process.env.NXAS_GW_MODE === 'nginx' ? '/_nxas' : '';
+    const sid = decodeURIComponent(ticketMatch[1]);
+    const ticket = issueTicket(sid);
     return sendJson(res, 200, {
-      url: `/m/v1/agent/${ticketMatch[1]}/events?ticket=${encodeURIComponent(ticket)}`,
+      url: `${basePath}/m/v1/agent/${encodeURIComponent(sid)}/events?ticket=${encodeURIComponent(ticket)}`,
       expiresInMs: 60_000,
     });
   }
 
   // ⑥ 审计 + 反代
+  // 短票通道（X-Auth-Cred: ticket，由 nginx auth_request 子请求带下来）不注入机机凭据：
+  // 票本身就是授权，而机机 Basic 必须只给「原请求已通过鉴权」的路径——两个入口都一致。
+  const viaTicket = device.ticket === true
+    || String(req.headers['x-auth-cred'] || '').toLowerCase() === 'ticket';
   appendAudit({ action: 'gw.proxy', deviceId: device.id, detail: { method: req.method, path: url.pathname } }).catch(() => {});
-  return proxyToUpstream(req, res, upstreamPath);
+  return proxyToUpstream(req, res, upstreamPath, { withMachineAuth: !viaTicket });
 }
 
 // ---------- 反代（流式管道） ----------
 
-function proxyToUpstream(req, res, upstreamPath) {
+function proxyToUpstream(req, res, upstreamPath, { withMachineAuth = true } = {}) {
   const { host, port } = upstreamUrl();
   const headers = { ...req.headers };
   headers.host = `${host}:${port}`;
-  headers.authorization = machineAuthHeader();
+  delete headers['x-auth-cred']; // nx-as 内部头，不外传
+  if (withMachineAuth) {
+    headers.authorization = machineAuthHeader();
+  } else {
+    // 短票通道：清掉客户端的 Authorization，也**绝不**注入机机 Basic。
+    // 否则任何人裸请求 /m/v1/agent/:id/events 都能拿到 pi-web 会话内容，
+    // 网关鉴权形同虚设。短票已由 nx-as 消费，pi-web 侧凭据为 null 很正常。
+    delete headers.authorization;
+  }
   delete headers['content-length']; // 管道转发时由 node 重算
   if (headers['x-forwarded-for']) headers['x-forwarded-for'] += `, ${req.socket.remoteAddress}`;
   else headers['x-forwarded-for'] = req.socket.remoteAddress || '';

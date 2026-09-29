@@ -6,15 +6,24 @@
 // 节流键：认证前 ip:*、认证后 tok:*（与 direct 模式同语义）
 import { verifyDeviceToken } from '../../modules/gateway/service.js';
 import { appendAudit } from '../../core/audit.js';
-import { verifyTicket } from './tickets.js';
+import { resolveTicket } from './tickets.js';
 import { retryAfterMs, recordFailure } from './throttle.js';
 
-// 从 URI 提取 events 短票（/m/v1/agent/:id/events?ticket=...）
+// 从 URI 提取 SSE 短票与目标会话 id。
+//
+// 路径形态（两种模式都要认，否则票签了却永远验不过——这坑踩过一次）：
+//   direct 模式原始 URI      : /m/v1/agent/:id/events?ticket=…
+//   nginx 模式 auth_request 的 X-Original-Uri : /_nxas/m/v1/agent/:id/events?ticket=…
+//     （server.js 在 stripPrefix 之前把用户实际请求的 URI 透传过来）
+const TICKET_PATH_RE = /(?:\/_nxas)?(?:\/m\/v1)?\/agent\/([^/]+)\/events$/;
+
 export function ticketFromUri(rawUri) {
   try {
     const u = new URL(rawUri || '', 'http://x');
-    if (!/^\/agent\/[^/]+\/events$/.test(u.pathname)) return null;
-    return u.searchParams.get('ticket');
+    const m = TICKET_PATH_RE.exec(u.pathname);
+    if (!m) return null;
+    // 特殊路径段 '.' / '..' 会在 URL 解析时被规范化掉，不存在越界风险
+    return { sessionId: decodeURIComponent(m[1]), ticket: u.searchParams.get('ticket') };
   } catch {
     return null;
   }
@@ -31,10 +40,10 @@ export async function decide({ authorization, cookieHeader, rawUri, ip = 'unknow
     return { decision: 'throttled', retryAfterSec: Math.max(1, Math.ceil(ipBlock / 1000)) };
   }
 
-  // SSE 事件流短票（EventSource 无 header 场景）
-  const ticket = ticketFromUri(rawUri);
-  if (ticket && verifyTicket(ticket)) {
-    return { decision: 'allow', device: { id: 'ticket', name: 'sse-ticket' } };
+  // SSE 事件流短票（EventSource 无 header 场景）。票与会话绑定：只能用在自己签发的那个会话上
+  const t = ticketFromUri(rawUri);
+  if (t && t.ticket && resolveTicket(t.ticket, t.sessionId)) {
+    return { decision: 'allow', device: { id: 'ticket', name: 'sse-ticket', ticket: true } };
   }
 
   // 登录会话 cookie（浏览器场景：登录一次，同源请求自动携带）
@@ -80,7 +89,8 @@ export async function handleAuthCheck(req, res, url) {
     ip,
   });
   if (r.decision === 'allow') {
-    res.writeHead(204, { 'X-Device-Id': r.device.id });
+    // X-Auth-Cred: ticket 让上游反代知道该用哪套凭据（短票不注入机机密码）
+    res.writeHead(204, { 'X-Device-Id': r.device.id, 'X-Auth-Cred': r.device.ticket ? 'ticket' : 'machine' });
     res.end();
     return;
   }

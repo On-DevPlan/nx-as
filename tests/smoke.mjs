@@ -95,6 +95,46 @@ try {
   const page = await fetch(`${BASE}/`);
   const html = await page.text();
   ok(page.status === 200 && html.includes('<div id="root">'), '静态面板 index.html');
+
+  // 5. SSE 短票端到端：签发（带前缀） → 无 header 带票请求
+  //
+  // 这段是回归测试：短票曾经「签发了但永远验不过」——check.js 的路径正则只匹配
+  // /agent/:id/events，而实际请求路径是 /m/v1/agent/:id/events（差一层 /m/v1）。
+  // 断言必须打到「带票请求不再 401」这一步，只测签发端点会漏掉。
+  const gwSvc = await import(new URL('../src/modules/gateway/service.js', import.meta.url).href);
+  const { token: dt } = await gwSvc.issueToken({ name: 'smoke-ticket' });
+  ok(typeof dt === 'string' && dt.startsWith('nxas_d1.'), '签发 device token（短票前置）');
+
+  const sid = 'smoke-sess-1';
+  const ticketRes = await fetch(`${BASE}/m/v1/sessions/${sid}/ticket`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${dt}`, 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  const ticketBody = await ticketRes.json().catch(() => ({}));
+  ok(ticketRes.status === 200 && typeof ticketBody.url === 'string',
+    `短票签发 return url（${ticketBody.url || '无'}）`);
+  // direct 模式无前缀；nginx 模式必须带 /_nxas（否则手机端会打到根路径）
+  ok(!process.env.NXAS_GW_MODE || ticketBody.url?.startsWith('/_nxas/m/v1/'),
+    '短票 url 前缀随部署模式');
+
+  // 带票请求：本机没装 pi-web，上游不可达是预期的（502/404 都算「票通过了」），
+  // 唯一不能出现的是 401 —— 那是票被拒的信号（曾经就是这样：签发了却永远验不过）。
+  const viaTicket = await fetch(`${BASE}${ticketBody.url}`, { headers: { Accept: 'text/event-stream' } });
+  ok(viaTicket.status !== 401, `带票请求不再 401（实际 ${viaTicket.status}）`);
+  const replay = await fetch(`${BASE}${ticketBody.url}`, { headers: { Accept: 'text/event-stream' } });
+  ok(replay.status === 401, `短票重放 → 401（实际 ${replay.status}）`);
+
+  // 票与会话绑定：拿 A 会话的票去读 B 会话 → 401
+  const otherSid = 'smoke-sess-2';
+  const t2 = await fetch(`${BASE}/m/v1/sessions/${otherSid}/ticket`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${dt}`, 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  const url2 = (await t2.json().catch(() => ({}))).url;
+  const cross = await fetch(`${BASE}${url2.replace(otherSid, sid)}`);
+  ok(cross.status === 401, `短票换会话使用 → 401（实际 ${cross.status}）`);
 } finally {
   server.kill('SIGTERM');
 }

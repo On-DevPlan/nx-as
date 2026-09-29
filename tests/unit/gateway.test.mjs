@@ -10,7 +10,9 @@ const imp = (p) => import(pathToFileURL(join(ROOT, p)).href);
 process.env.NX_AS_STORE = join(ROOT, '.tool', 'test-store', 'gateway-unit.json');
 
 const svc = await imp('src/modules/gateway/service.js');
-const { issueTicket, verifyTicket } = await imp('src/runtime/gateway/tickets.js');
+const { issueTicket, resolveTicket, verifyTicket, __resetTicketsForTest } =
+  await imp('src/runtime/gateway/tickets.js');
+const { ticketFromUri } = await imp('src/runtime/gateway/check.js');
 const { retryAfterMs, recordFailure, backoffDelayMs, resetThrottle } = await imp('src/runtime/gateway/throttle.js');
 const { resetStoreCache } = await imp('src/core/store.js');
 
@@ -50,8 +52,9 @@ test('device token: 未知名/超长名拒绝', async () => {
 // ---------- SSE 短票 ----------
 
 test('短票: 有效一次、过期拒、篡改拒、格式拒', async () => {
-  const t = issueTicket();
-  assert.match(t, /^t1\.\d+\.[0-9a-f]{32}\.[0-9a-f]{64}$/);
+  __resetTicketsForTest();
+  const t = issueTicket('sess-abc');
+  assert.match(t, /^t1\.sess-abc\.\d+\.[0-9a-f]{32}\.[0-9a-f]{64}$/);
   assert.equal(verifyTicket(t), true, '首次验证通过');
   assert.equal(verifyTicket(t), false, '重放拒绝');
 
@@ -63,6 +66,44 @@ test('短票: 有效一次、过期拒、篡改拒、格式拒', async () => {
   assert.equal(verifyTicket('t1.123.abc'), false);
   assert.equal(verifyTicket(undefined), false);
   assert.equal(verifyTicket(''), false);
+});
+
+test('短票: 绑定会话（换会话即拒且消费票）+ 会话 id 参与签名', () => {
+  __resetTicketsForTest();
+  const t = issueTicket('sess-1');
+  // 拿去读别的会话 → 拒绝，且该票**同时作废**（拿偷来的票试别的会话只会加速作废）
+  assert.equal(resolveTicket(t, 'sess-2'), null, '会话不匹配拒绝');
+  assert.equal(resolveTicket(t, 'sess-1'), null, '不匹配已消费掉这张票');
+
+  // 换成「改签名段里的会话 id」也拒（签名覆盖 sessionId）
+  const t2 = issueTicket('sess-1');
+  const forged = t2.replace('t1.sess-1.', 't1.sess-2.');
+  assert.equal(resolveTicket(forged, 'sess-2'), null, '改会话 id 破坏签名');
+
+  // 正常路径：同会话可用一次
+  const t3 = issueTicket('sess-1');
+  assert.deepEqual(resolveTicket(t3, 'sess-1'), { sessionId: 'sess-1' });
+  assert.equal(resolveTicket(t3, 'sess-1'), null, '已消费');
+
+  assert.throws(() => issueTicket(), (e) => e.code === 'INVALID_INPUT', '必须传 sessionId');
+});
+
+test('短票: 从 URI 提取（direct 与 nginx 两种路径形态都要认）', () => {
+  const tk = 't1.sess-x.1.a.bb';
+  assert.deepEqual(
+    ticketFromUri(`/m/v1/agent/sess-x/events?ticket=${tk}`),
+    { sessionId: 'sess-x', ticket: tk },
+    'direct 模式原始 URI',
+  );
+  assert.deepEqual(
+    ticketFromUri(`/_nxas/m/v1/agent/sess-x/events?ticket=${tk}`),
+    { sessionId: 'sess-x', ticket: tk },
+    'nginx 模式 X-Original-Uri（内层 url 无 /_nxas）',
+  );
+  // 非 SSE 路径不提取（票只在 events 上生效）
+  assert.equal(ticketFromUri(`/m/v1/sessions/sess-x/ticket?ticket=${tk}`), null);
+  assert.equal(ticketFromUri('/m/v1/agent/sess-x/ticket'), null);
+  assert.equal(ticketFromUri(''), null);
 });
 
 // ---------- 节流 ----------

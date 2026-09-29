@@ -26,7 +26,7 @@ test('renderTemplate: 关键结构齐备（auth_request/直代/短票端点/SSE 
   assert.ok(t.includes('proxy_pass http://127.0.0.1:30141/api/'), '直代 pi-web 且前缀替换 /m/v1→/api');
   assert.ok(t.includes('Authorization "Basic SECRET"'), '机机 Basic 注入');
   assert.ok(t.includes('proxy_buffering off'), 'SSE 不缓冲');
-  assert.ok(t.includes('location = /m/v1/pair'), '签发端点直通');
+  assert.ok(t.includes('location ~ ^/m/v1/sessions/[^/]+/ticket$'), '短票端点直通');
   assert.ok(t.includes('ticket$'), '短票端点直通');
   assert.ok(t.includes('proxy_read_timeout 1h'), 'SSE 长连超时');
 });

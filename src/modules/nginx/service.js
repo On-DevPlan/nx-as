@@ -63,6 +63,9 @@ server {
     location /m/v1/ {
         auth_request /_nxas_auth;
         auth_request_set $nxas_device $upstream_http_x_device_id;
+        # 短票通道不带机机凭据（票即授权）：nx-as 在 X-Auth-Cred: ticket 时就要求
+        # 不要注入 Basic。缺了这句会退化成「票被换成 Basic」，等于放行裸请求
+        auth_request_set $nxas_cred $upstream_http_x_auth_cred;
         proxy_pass http://127.0.0.1:${upstreamPort}/api/;
         proxy_set_header Authorization "Basic ${secret}";
         proxy_http_version 1.1;
@@ -70,6 +73,7 @@ server {
         proxy_buffering off;          # SSE 关键：不缓冲
         proxy_read_timeout 1h;        # SSE 长连
         proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Auth-Cred $nxas_cred;
         add_header X-Nxas-Device $nxas_device always;
     }
 

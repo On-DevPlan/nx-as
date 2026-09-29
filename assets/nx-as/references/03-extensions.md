@@ -44,7 +44,7 @@ pi 扩展的 `ctx.ui` 是终端上下文（pi-web 已桥接为 `extension_ui_req
 
 | pi TUI 命令 | 等价 |
 |---|---|
-| `pi /settings` | pi-web 设置页；CLI：`nx-as settings get/set`（仅 Bearer 代理） |
+| `pi /settings` | pi-web 自带设置页（模型/插件/技能全在那里管） |
 | `pi /login` | pi-web 设置页（provider 登录/API key） |
 | `pi /model` | pi-web 模型选择器；或 `models.json` 自定义端点 |
 | 全局 prompt 模板 | pi-web 会话内 `/prompt`；或 AGENTS.md 写全局指引 |

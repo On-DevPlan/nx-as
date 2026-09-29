@@ -62,6 +62,7 @@ CATCHALL_AUTH=$(cat /tmp/nxas-catchall-auth.txt)
 if [ "$CATCHALL_AUTH" = "1" ]; then
   export NXAS_CATCHALL_BODY='        auth_request /_nxas/auth-internal;
         auth_request_set $nxas_device $upstream_http_x_device_id;
+        auth_request_set $nxas_cred $upstream_http_x_auth_cred;
         error_page 401 = @nxas_login;
         proxy_pass http://127.0.0.1:__TARGET_PORT__;
         proxy_set_header Host $http_host;
@@ -71,6 +72,7 @@ if [ "$CATCHALL_AUTH" = "1" ]; then
         proxy_buffering off;
         proxy_read_timeout 1h;
         proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Auth-Cred $nxas_cred;
         add_header X-Nxas-Device $nxas_device always;'
 else
   export NXAS_CATCHALL_BODY='        proxy_pass http://127.0.0.1:__TARGET_PORT__;
