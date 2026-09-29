@@ -1,8 +1,13 @@
 import { mutateStore } from '../../core/store.js';
 import { randomBytes } from 'node:crypto';
+import { badInput } from '../../core/errors.js';
 import {
   nginxConfig, nginxStatus, nginxApply, nginxRollback, nginxPreview, nginxSetup, isLinux,
 } from './service.js';
+import {
+  isContainerMode, readTemplate, readRendered, applyTemplate, rollbackTemplate,
+  TEMPLATE_PATH, RENDERED_PATH,
+} from './container.js';
 
 const actions = [
   {
@@ -25,27 +30,36 @@ const actions = [
     id: 'nginx.configGet',
     cli: ['nginx', 'config'],
     http: ['GET', '/api/nginx/config'],
-    summary: '查看托管配置（--preview 输出渲染后的完整 nginx 配置）',
+    summary: '查看配置（容器模式：返回可编辑的模板 + 渲染后的生效配置）',
     flags: { preview: { type: 'boolean' } },
     run: async (ctx) => {
+      if (isContainerMode()) {
+        const [template, rendered] = await Promise.all([readTemplate(), readRendered()]);
+        return { mode: 'container', templatePath: TEMPLATE_PATH, renderedPath: RENDERED_PATH, template, rendered };
+      }
       const cfg = await nginxConfig();
       if (ctx.preview) return { ...cfg, rendered: await nginxPreview() };
       return cfg;
     },
-    render: (r) => (r.rendered ? r.rendered : JSON.stringify(r, null, 2)),
+    render: (r) => (r.mode === 'container' ? r.template : r.rendered || JSON.stringify(r, null, 2)),
   },
   {
     id: 'nginx.apply',
     cli: ['nginx', 'apply'],
     http: ['POST', '/api/nginx/apply'],
-    summary: '渲染模板→写托管文件→nginx -t（失败自动回滚）→graceful reload',
+    summary: '写模板→渲染→nginx -t（失败自动回滚）→graceful reload（容器/宿主双模式）',
     flags: {
       domain: { type: 'string' },
       'cert-path': { type: 'string' },
       'key-path': { type: 'string' },
       'managed-path': { type: 'string' },
     },
-    run: (ctx) => {
+    run: async (ctx) => {
+      // 容器模式：整文件模板编辑（面板高级模式送 template 字段）
+      if (isContainerMode()) {
+        if (typeof ctx.template !== 'string') throw badInput('容器模式需要 template 字段（整文件模板内容）');
+        return applyTemplate(ctx.template);
+      }
       const patch = {};
       if (ctx.domain !== undefined) patch.domain = ctx.domain;
       if (ctx['cert-path'] !== undefined) patch.certPath = ctx['cert-path'];
@@ -53,14 +67,16 @@ const actions = [
       if (ctx['managed-path'] !== undefined) patch.managedPath = ctx['managed-path'];
       return nginxApply(patch, { rawConfig: ctx.rawConfig });
     },
-    render: (r) => `已生效: ${r.domain}\n托管文件: ${r.managedPath}（nginx -t 通过 + graceful reload）`,
+    render: (r) => r.mode === undefined && r.template
+      ? `已生效（容器）: ${r.template} → ${r.rendered}（nginx -t 通过 + reload）`
+      : `已生效: ${r.domain}\n托管文件: ${r.managedPath}（nginx -t 通过 + graceful reload）`,
   },
   {
     id: 'nginx.rollback',
     cli: ['nginx', 'rollback'],
     http: ['POST', '/api/nginx/rollback'],
-    summary: '回滚到上一版托管配置（.bak）并 reload',
-    run: () => nginxRollback(),
+    summary: '回滚到上一版配置（.bak）并 reload',
+    run: () => (isContainerMode() ? rollbackTemplate() : nginxRollback()),
     render: (r) => `已回滚: ${r.rolledBackTo}`,
   },
   {
