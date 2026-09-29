@@ -134,6 +134,8 @@ jobs:
 
             echo "Loading image..."
             gunzip -c nx-as-image.tar.gz | docker load
+            # artifact 内部 tag 固定 0.4.1（save 时打）；retag 成 compose 引用的 local
+            docker tag nx-as:0.4.1 nx-as:local || true
 
             # compose 引用 nx-as:local（load 进来的 tag）
             docker compose up -d --force-recreate
