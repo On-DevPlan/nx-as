@@ -1,5 +1,6 @@
-# nx-as 容器内 nginx 模板（entrypoint 用 envsubst 渲染 NXAS_MACHINE_B64 / NXAS_LISTEN_PORT / NXAS_TLS_BLOCK）
-# 默认 HTTP；HTTPS 由外部证书导入后 entrypoint 注入 NXAS_TLS_BLOCK 启用
+# nx-as 容器内 nginx 模板（entrypoint 用 envsubst 渲染）
+# 路径契约：nx-as 自有功能全部收在 /_nxas/ 特殊前缀；其余一切路径 100% 原样直代
+# pi-web（它的 /login、/api/*、/_next/* 与直跑根路径完全一致，零改动零感知）。
 
 server {
     listen ${NXAS_LISTEN_PORT};
@@ -7,55 +8,52 @@ server {
     absolute_redirect off;
 ${NXAS_TLS_BLOCK}
 
-    # ── 网关本地端点：配对与短票签发（自带校验，不走 auth_request）──
-    location = /m/v1/pair {
-        proxy_pass http://127.0.0.1:7801;
-        proxy_set_header X-Forwarded-For $remote_addr;
-    }
-    location ~ ^/m/v1/sessions/[^/]+/ticket$ {
-        proxy_pass http://127.0.0.1:7801;
-        proxy_set_header Authorization $http_authorization;
+    # ── nx-as 登录页（浏览器未登录时 302 的目的地）──
+    location = /_nxas/login {
+        proxy_pass http://127.0.0.1:7801/_nxas/login;
         proxy_set_header X-Forwarded-For $remote_addr;
     }
 
-    # ── 数据路径：委托鉴权 + 直代 pi-web（SSE 直通）──
-    location /m/v1/ {
-        auth_request /_nxas_auth;
-        auth_request_set $nxas_device $upstream_http_x_device_id;
-        proxy_pass http://127.0.0.1:30141/api/;
-        proxy_set_header Authorization "Basic ${NXAS_MACHINE_B64}";
+    # ── nx-as 全部自有端点（鉴权决策/登录/管理面 API/手机 API）──
+    # 手机 API /m/v1/*：自带 Bearer 鉴权（pair 免鉴权），不经 auth_request
+    location /_nxas/ {
+        proxy_pass http://127.0.0.1:7801/_nxas/;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
-        proxy_buffering off;          # SSE 关键：不缓冲
-        proxy_read_timeout 1h;        # SSE 长连
+        proxy_buffering off;
+        proxy_read_timeout 1h;
+    }
+    location /m/v1/ {
+        proxy_pass http://127.0.0.1:7801/_nxas/m/v1/;
         proxy_set_header X-Forwarded-For $remote_addr;
-        add_header X-Nxas-Device $nxas_device always;
+        proxy_set_header Authorization $http_authorization;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_buffering off;          # SSE 事件流不缓冲
+        proxy_read_timeout 1h;
     }
 
-    # ── pi-web 完整页面（受同一 auth_request 拦截；登录一次 cookie 全站携带）──
-    location /pi/ {
+    # ── 其余一切：auth_request 拦截 + 100% 原样直代 pi-web ──
+    location / {
         auth_request /_nxas_auth;
         auth_request_set $nxas_device $upstream_http_x_device_id;
         error_page 401 = @nxas_login;
-        proxy_pass http://127.0.0.1:30141/;
+        proxy_pass http://127.0.0.1:30141;
         proxy_set_header Authorization "Basic ${NXAS_MACHINE_B64}";
         proxy_http_version 1.1;
         proxy_set_header Connection "";
         proxy_buffering off;          # SSE 不缓冲
-        proxy_read_timeout 1h;
+        proxy_read_timeout 1h;        # SSE 长连
         proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Nxas-Device $nxas_device;
-        # 浏览器渲染需要的响应头透传
         add_header X-Nxas-Device $nxas_device always;
     }
-
-    # pi-web 的静态资源路径同样拦截（/_next/* 等经 /pi/ 前缀天然命中上面 location）
 
     # ── 委托端点：每请求一个 loopback 子请求 ──
     location = /_nxas_auth {
         internal;
-        proxy_pass http://127.0.0.1:7801/auth/check;
+        proxy_pass http://127.0.0.1:7801/_nxas/auth/check;
         proxy_pass_request_body off;
         proxy_set_header Content-Length "";
         proxy_set_header Authorization $http_authorization;
@@ -67,17 +65,7 @@ ${NXAS_TLS_BLOCK}
     }
 
     # 未登录的浏览器页面请求 → 跳 nx-as 登录页（登录后回原路径）
-    # absolute_redirect off：保持相对 Location，避免把容器内端口(8080)拼进绝对 URL
     location @nxas_login {
-        return 302 /login?next=$request_uri;
-    }
-
-    # ── 管理面板（管理密钥在 nx-as 侧校验）──
-    location / {
-        proxy_pass http://127.0.0.1:7801;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-        proxy_read_timeout 1h;
+        return 302 /_nxas/login?next=$request_uri;
     }
 }
