@@ -19,6 +19,8 @@ mkdir -p "$DATA" "$DATA/pi-agent/extensions" "$DATA/pi-agent/skills" /etc/nginx/
 # ---------- 配置（环境变量，全部有默认值） ----------
 export NX_AS_HOME=/data
 export NX_AS_STORE=/data/store.json
+# pi 的 agent dir：显式指向挂载卷（paths.js 与 launcher 都优先读这个环境变量）
+export PI_CODING_AGENT_DIR="${PI_CODING_AGENT_DIR:-/data/pi-agent}"
 export NXAS_LISTEN_PORT="${NXAS_LISTEN_PORT:-8080}"     # 对外端口（nginx）
 export NXAS_API_PORT="${NXAS_API_PORT:-7801}"           # nx-as 网关端口（内部）
 export NXAS_TARGET_PORT="${NXAS_TARGET_PORT:-30141}"    # 主进程端口（默认 pi-web）

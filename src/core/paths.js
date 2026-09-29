@@ -5,7 +5,8 @@ export const APP_NAME = 'nx-as';
 export const APP_DIR = join(homedir(), `.${APP_NAME}`);
 export const STORE_PATH = join(APP_DIR, 'store.json');
 // pi 的 agent 目录隔离在 nx-as 自己的目录下（auth.json / models.json / sessions 都在里面）
-export const PI_AGENT_DIR = join(APP_DIR, 'pi-agent');
+// 容器/多实例可用 PI_CODING_AGENT_DIR 覆盖（容器内 = /data/pi-agent，落在挂载卷上才会持久）
+export const PI_AGENT_DIR = process.env.PI_CODING_AGENT_DIR || join(APP_DIR, 'pi-agent');
 
 // 允许测试与多实例覆盖存储位置：环境变量优先
 export function storePathFromEnv() {
