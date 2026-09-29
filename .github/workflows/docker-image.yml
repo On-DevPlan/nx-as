@@ -49,10 +49,12 @@ jobs:
 
       - name: GHCR 镜像名（小写归一）
         id: ghcr
+        env:
+          REPO_OWNER: ${{ github.repository_owner }}
         run: |
-          OWNER=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
-          echo "base=ghcr.io/${OWNER}/nx-as-base" >> $GITHUB_OUTPUT
-          echo "full=ghcr.io/${OWNER}/nx-as" >> $GITHUB_OUTPUT
+          OWNER=$(printf '%s' "$REPO_OWNER" | tr '[:upper:]' '[:lower:]')
+          echo "base=ghcr.io/${OWNER}/nx-as-base" >> "$GITHUB_OUTPUT"
+          echo "full=ghcr.io/${OWNER}/nx-as" >> "$GITHUB_OUTPUT"
 
       # ── base：纯权限壳。先本地构建 + 冒烟，通过后才推 GHCR ──
       # 注意：不能在同一 build-push-action 里混「本地 tag + GHCR tag + push:true」——
@@ -117,8 +119,9 @@ jobs:
           tags: |
             nx-as:${{ steps.meta.outputs.version }}
             nx-as:local
-          cache-from: type=gha,scope=full
-          cache-from: type=gha,scope=base
+          cache-from: |
+            type=gha,scope=full
+            type=gha,scope=base
           cache-to: type=gha,mode=max,scope=full
 
       - name: 冒烟：full 镜像（容器能起、面板可达、路径契约）
