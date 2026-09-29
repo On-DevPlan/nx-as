@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.7.0 (2026-09-29)
+
+**基础镜像 + 零感知登录 + 单一命名空间**：nx-as 与 nginx 打包为基础镜像，主进程（默认 pi-web）可替换；nx-as 全部功能收进 `/_nxas/*` 一个前缀。
+
+### Added
+
+- **零感知登录（bootstrap）**：`/_nxas/auth/login` 登录时，nx-as 用机机信任在服务端代签上游（pi-web）session cookie，与自身 cookie 一起下发——浏览器只输一次 device token，主程序无感知。
+- **基础镜像形态**：`NXAS_TARGET_CMD`/`NXAS_TARGET_PORT`/`NXAS_PROTECT` 环境变量驱动；`FROM nx-as` 即可构建带鉴权的自有应用镜像（`docker/render-protect.mjs` 按路径模式生成 auth_request location）。
+- **单一命名空间 `/_nxas/*`**：面板（`/_nxas/panel`）、登录页、管理 API、手机 API 全部收进来；其余路径 100% 原样给主进程（pi-web 的 `/login`、`/api/*`、`/_next/*` 零改动）。
+- **面板 nginx 编辑器（容器模式）**：直接编辑生效模板 → 渲染 → `nginx -t`（失败回滚）→ reload；`/assets`、logo/favicon 放行。
+- **SSE 短票绑定会话**：票与会话 id 一起签名，偷票读别的会话既拒绝又作废。
+- **pi 数据落挂载卷**：`PI_CODING_AGENT_DIR` 环境变量优先（修复会话写容器可写层、重建即丢的问题）。
+
+### Removed（breaking）
+
+- **配对码机制**：`device pair`/`pairCreate`/`pairRedeem`/`POST /m/v1/pair` 全删，改为 `nx-as device issue --name <名>` 直接签发。
+- **settings 模块**：Bearer 代理配置（provider/baseUrl/models/token）删除——模型/插件/技能管理全部交给 pi-web 自带设置页。
+- `gateway/extensions.js`（Bearer 扩展生成器）、`store.settings`、`store.pairCodes`。
+- 旧的 `/m/v1/*` 顶层路径（收回 `/_nxas/m/v1/*`）。
+
 ## 0.4.1 (2026-09-28)
 
 单容器全内置镜像 + GitHub Actions 构建分发（docker save，不走 registry）。
