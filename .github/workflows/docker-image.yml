@@ -194,82 +194,96 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     if: startsWith(github.ref, 'refs/tags/v') || inputs.deploy == true
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      IMAGE: ${{ needs.build.outputs.full_image }}
     steps:
-      # 部署方式：47 **自己从 GHCR 拉镜像**（实测 47→ghcr.io 0.57s）。
-      # 不再 SCP 253MB 镜像包——CI runner → 47 的 scp-action 反复挂起（多次实测），
-      # 而 47 直连 GitHub 极快。compose 由本步骤生成（避免外挂旧文件造成版本漂移）。
-      - name: 47 拉镜像 + 起服务 + 健康检查
-        uses: appleboy/ssh-action@v1.0.3
+      - uses: actions/checkout@v4
+
+      # 部署通道：docker save | gzip **流式管道**直达 47 的 docker load。
+      # 为什么不用 appleboy/scp-action：253MB 经它中转多次实测挂起（40min+ 无进展）。
+      # 为什么不用 GHCR 拉取：47 实测 docker pull 该镜像 6m54s，而压缩流式上传同尺寸约 1/3 时间。
+      # 实测依据（2026-09-29）：47→GHCR 延迟 0.57s 但吞吐仅 0.6MB/s；本机→47 管道 2.4MB/s。
+      - name: 准备 SSH
         env:
-          IMAGE: ${{ needs.build.outputs.full_image }}
-          VERSION: ${{ needs.build.outputs.version }}
-          GHCR_USER: ${{ github.actor }}
-          GHCR_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
-        with:
-          host: ${{ secrets.SSH47_HOST }}
-          username: ${{ secrets.SSH47_USER || 'root' }}
-          key: ${{ secrets.SSH47_KEY }}
-          port: ${{ secrets.SSH47_PORT || 22 }}
-          timeout: 10m
-          command_timeout: 15m
-          envs: IMAGE,VERSION,GHCR_USER,GHCR_TOKEN
-          script: |
-            set -e
-            cd /opt/nx-as
-            mkdir -p data
+          SSH_KEY: ${{ secrets.SSH47_KEY }}
+          HOST: ${{ secrets.SSH47_HOST }}
+          PORT: ${{ secrets.SSH47_PORT || '22' }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
-            # 拉取凭据：包为 public 时可留空 GHCR_PULL_TOKEN（匿名拉取）
-            if [ -n "$GHCR_TOKEN" ]; then
-              echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-            fi
+      - name: 流式上传并 load（docker save | gzip | ssh docker load）
+        env:
+          HOST: ${{ secrets.SSH47_HOST }}
+          USER: ${{ secrets.SSH47_USER || 'root' }}
+          PORT: ${{ secrets.SSH47_PORT || '22' }}
+        run: |
+          set -o pipefail
+          SIZE=$(docker image inspect "$IMAGE:$VERSION" --format '{{.Size}}')
+          echo "镜像大小: $((SIZE/1024/1024)) MB (${IMAGE}:${VERSION})"
+          # -1 最快压缩：瓶颈是链路不是 CPU，压缩率够用即可
+          docker save "$IMAGE:$VERSION" | gzip -1 | ssh -p "$PORT" -i ~/.ssh/deploy_key \
+            -o ConnectTimeout=20 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 \
+            "$USER@$HOST" "docker load"
 
-            # compose 由 CI 生成（单一事实来源；不再从服务器外挂模板/compose）
-            cat > docker-compose.yml <<COMPOSE_EOF
-            services:
-              nx-as:
-                image: ${IMAGE}:${VERSION}
-                container_name: nx-as
-                ports:
-                  - "18080:8080"
-                volumes:
-                  - ./data:/data
-                environment:
-                  NX_AS_STORE: /data/store.json
-                  NX_AS_TOKEN: \${NX_AS_TOKEN:-}
-                restart: unless-stopped
-                mem_limit: 700m
-                logging:
-                  driver: json-file
-                  options: { max-size: "10m", max-file: "3" }
-            COMPOSE_EOF
+      - name: 写 compose + 起服务 + 健康检查
+        env:
+          HOST: ${{ secrets.SSH47_HOST }}
+          USER: ${{ secrets.SSH47_USER || 'root' }}
+          PORT: ${{ secrets.SSH47_PORT || '22' }}
+        run: |
+          ssh -p "$PORT" -i ~/.ssh/deploy_key -o ConnectTimeout=20 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=10 "$USER@$HOST" \
+            'VERSION='"$VERSION"' IMAGE='"$IMAGE"' sh -s' <<'REMOTE'
+          set -e
+          cd /opt/nx-as
+          mkdir -p data
 
-            echo "拉取 ${IMAGE}:${VERSION} ..."
-            docker compose pull
-            docker compose up -d --force-recreate
+          # compose 由 CI 生成（单一事实来源；不再从服务器外挂旧模板/compose → 根治版本漂移）
+          cat > docker-compose.yml <<COMPOSE_EOF
+          services:
+            nx-as:
+              image: ${IMAGE}:${VERSION}
+              container_name: nx-as
+              ports:
+                - "18080:8080"
+              volumes:
+                - ./data:/data
+              environment:
+                NX_AS_STORE: /data/store.json
+                NX_AS_TOKEN: \${NX_AS_TOKEN:-}
+              restart: unless-stopped
+              mem_limit: 700m
+              logging:
+                driver: json-file
+                options: { max-size: "10m", max-file: "3" }
+          COMPOSE_EOF
 
-            echo "健康检查..."
-            ok=false
-            for i in $(seq 1 60); do
-              if curl -fs http://127.0.0.1:18080/_nxas/api/auth/verify >/dev/null 2>&1; then ok=true; break; fi
-              sleep 2
-            done
-            if [ "$ok" != true ]; then
-              echo "健康检查失败，容器日志："
-              docker compose logs --tail 100
-              exit 1
-            fi
-            echo "容器内探活 OK"
-            curl -s http://127.0.0.1:18080/_nxas/api/auth/verify; echo
-            docker compose ps
+          docker compose up -d --force-recreate
 
-      - name: 清理旧镜像（保留当前 + 最近一个）
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.SSH47_HOST }}
-          username: ${{ secrets.SSH47_USER || 'root' }}
-          key: ${{ secrets.SSH47_KEY }}
-          port: ${{ secrets.SSH47_PORT || 22 }}
-          script: |
-            docker image prune -f || true
-            echo "已部署镜像："
-            docker images ghcr.io --format '{{.Repository}}:{{.Tag}} {{.Size}}' | head -5 || true
+          echo "健康检查..."
+          ok=false
+          for i in $(seq 1 60); do
+            if curl -fs http://127.0.0.1:18080/_nxas/api/auth/verify >/dev/null 2>&1; then ok=true; break; fi
+            sleep 2
+          done
+          if [ "$ok" != true ]; then
+            echo "健康检查失败，容器日志："
+            docker compose logs --tail 100
+            exit 1
+          fi
+          echo "容器内探活 OK"
+          curl -s http://127.0.0.1:18080/_nxas/api/auth/verify; echo
+          docker compose ps
+          REMOTE
+
+      - name: 清理旧镜像
+        env:
+          HOST: ${{ secrets.SSH47_HOST }}
+          USER: ${{ secrets.SSH47_USER || 'root' }}
+          PORT: ${{ secrets.SSH47_PORT || '22' }}
+        run: |
+          ssh -p "$PORT" -i ~/.ssh/deploy_key -o ConnectTimeout=20 "$USER@$HOST" \
+            'docker image prune -f >/dev/null 2>&1 || true; echo 已部署镜像：; docker images --format "{{.Repository}}:{{.Tag}} {{.Size}}" | grep -E "nx-as|ghcr.io/on-devplan" | head -5'
