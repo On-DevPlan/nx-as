@@ -5,12 +5,11 @@
 //   ② 节流（认证前按 IP）
 //   ③ 路由白名单（/m/v1/pair 免 Bearer；SSE events 走短票）
 //   ④ device-auth（Bearer → store 校验）——决策逻辑在 check.js（与 nginx 模式的 /auth/check 共享）
-//   ⑤ 审计 + 反代（注入 Authorization: Basic pi:<机机密码>，机机密码 serve 启动时随机生成）
+//   ⑤ 审计 + 反代（注入 Authorization: Basic pi:<机机密码>，机机密码与 pi-web PI_WEB_PASSWORD 同源）
 //
 // nginx 模式（NXAS_GW_MODE=nginx）下本模块不挂载：数据路径由 nginx 直代 pi-web，
 // nx-as 只暴露 /auth/check（check.js）与签发端点。
 import http from 'node:http';
-import { randomBytes } from 'node:crypto';
 import { pairRedeem } from '../../modules/gateway/service.js';
 import { appendAudit } from '../../core/audit.js';
 import { issueTicket } from './tickets.js';
@@ -19,16 +18,18 @@ import { decide } from './check.js';
 
 // ---------- 机机密码 ----------
 // 与 pi-web 的 PI_WEB_PASSWORD 同源：store.machineSecret（launcher spawn pi-web 时注入）。
-// 之前用进程随机值——launcher 用 store 值 spawn pi-web，两者不一致导致上游 401。
-let cachedPassword = null;
-export async function machineAuthHeader() {
-  if (!cachedPassword) {
-    const { loadStore } = await import('../../core/store.js');
-    const store = await loadStore();
-    cachedPassword = store.machineSecret || randomBytes(32).toString('hex');
-  }
+// 容器启动后同步预热（阻塞 < 100ms），保证第一批请求立即可用。
+let cachedMachineSecret = '';
+async function warmMachineSecret() {
+  const { loadStore } = await import('../../core/store.js');
+  const store = await loadStore();
+  cachedMachineSecret = store.machineSecret || '';
+}
+warmMachineSecret().catch(() => {});
+
+export function machineAuthHeader() {
   // pi-web 的 Basic 用户名固定 'pi'（lib/web-auth.ts PI_WEB_AUTH_USERNAME）
-  return `Basic ${Buffer.from(`pi:${cachedPassword}`).toString('base64')}`;
+  return `Basic ${Buffer.from(`pi:${cachedMachineSecret}`).toString('base64')}`;
 }
 
 // ---------- 上游地址 ----------
@@ -76,6 +77,14 @@ export async function handleGateway(req, res, url) {
   if (!hostAllowed(req)) {
     return sendJson(res, 403, { ok: false, error: 'Untrusted host', code: 'BLOCKED' });
   }
+  try {
+    return await _handleGateway(req, res, url);
+  } catch (err) {
+    console.error('NXAS_TRACE', err.stack);
+    throw err;
+  }
+}
+async function _handleGateway(req, res, url) {
   const ip = clientIp(req);
 
   // 路径解析：/m/v1/xxx → 上游 /api/xxx（pi-web 的 API 前缀收敛到这里）
@@ -149,17 +158,10 @@ function proxyToUpstream(req, res, upstreamPath) {
   const { host, port } = upstreamUrl();
   const headers = { ...req.headers };
   headers.host = `${host}:${port}`;
+  headers.authorization = machineAuthHeader();
   delete headers['content-length']; // 管道转发时由 node 重算
   if (headers['x-forwarded-for']) headers['x-forwarded-for'] += `, ${req.socket.remoteAddress}`;
   else headers['x-forwarded-for'] = req.socket.remoteAddress || '';
-
-  // 异步 await 鉴权头，但函数已 async（外层 handleGateway 已是 async）
-  // 用立即调用的 IIFE 不可——改成 async 版本：调用方 await
-  return _proxyToUpstream(req, res, upstreamPath, headers);
-}
-
-async function _proxyToUpstream(req, res, upstreamPath, headers) {
-  headers.authorization = await machineAuthHeader();
 
   const upstreamReq = http.request(
     { host, port, method: req.method, path: upstreamPath + (req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : ''), headers },
