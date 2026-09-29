@@ -30,8 +30,6 @@ jobs:
   build:
     name: Build images & deploy
     runs-on: ubuntu-latest
-    env:
-      VERSION: ${{ steps.meta.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
