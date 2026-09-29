@@ -74,12 +74,7 @@ jobs:
           docker rm -f smoke
           [ "$code" = "302" ] || { echo "::error::匿名 / 应 302 登录页，实得 $code"; exit 1; }
           [ "$code2" = "401" ] || { echo "::error::匿名 API 应 401，实得 $code2"; exit 1; }
-          # 401 = 网关正常拒绝；502 = pi-web 未就绪或 nx-as 错误；其余 = 异常
-          case "$code" in
-            401) echo "✅ 网关鉴权按预期拒绝" ;;
-            502|503|504) echo "::error::网关链路异常（pi-web 未就绪？）HTTP $code"; exit 1 ;;
-            *) echo "::error::非预期 HTTP $code"; exit 1 ;;
-          esac
+          echo "✅ v0.6 路径契约验证通过（/ → 302 登录页；/_nxas/m/v1 → 401）"
 
       - name: docker save + gzip
         run: |
