@@ -1,6 +1,7 @@
 # nx-as 单容器部署（47 服务器 /opt/nx-as/docker-compose.yml）
-# 镜像由 CI 构建经 docker save/load 分发（tag nx-as:0.4.1 是 artifact 内部 tag，load 后重打 local）
+# 镜像由 CI 构建经 docker save/load 分发；compose 只引用 nx-as:local（CI 部署时 retag）
 # 默认 HTTP；启用 HTTPS：面板「证书」导入后加 NXAS_TLS_PORT 环境变量
+# 注意：nginx 模板/entrypoint 不挂载——镜像自带正确版本，外挂旧版文件会踩「镜像与配置版本漂移」雷
 services:
   nx-as:
     image: nx-as:local
@@ -8,8 +9,7 @@ services:
     ports:
       - "18080:8080"   # 公网 HTTP 入口（47 上 8443/8080 被 gost 占用）
     volumes:
-      - ./data:/data   # store.json / audit.jsonl / pi-agent（会话+扩展+凭据）
-      - ./docker/nginx.conf.template:/etc/nginx/http.d/nx-as.conf.template:ro
+      - ./data:/data   # store.json / audit.jsonl / pi-agent（会话+扩展+凭据，PI_CODING_AGENT_DIR 已指到 /data/pi-agent）
     environment:
       NX_AS_STORE: /data/store.json
       NXAS_DOMAIN: ${NXAS_DOMAIN:-nx-as.local}
