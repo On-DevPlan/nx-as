@@ -27,6 +27,12 @@ ${NXAS_TLS_BLOCK}
         proxy_read_timeout 1h;
     }
 
+    # ── 面板 SPA 静态资源（/_nxas/panel 页面引用 /assets/*；JS/CSS 无敏感数据，
+    #    数据面由 TokenGate 管理密钥 + /_nxas/api/* 保护）──
+    location /assets/ {
+        proxy_pass http://127.0.0.1:${NXAS_API_PORT}/assets/;
+    }
+
     # ── 委托端点（internal：外部不可达，仅 auth_request 使用）──
     location = /_nxas/auth-internal {
         internal;
