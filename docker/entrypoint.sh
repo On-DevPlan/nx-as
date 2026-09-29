@@ -62,7 +62,13 @@ export NXAS_PROTECT_BLOCKS=$(cat /tmp/nxas-protect-blocks.conf)
 CATCHALL_AUTH=$(cat /tmp/nxas-catchall-auth.txt)
 
 if [ "$CATCHALL_AUTH" = "1" ]; then
-  export NXAS_CATCHALL_BODY='        auth_request /_nxas/auth-internal;
+  if [ -z "$NXAS_TARGET_CMD" ]; then
+    # 纯权限壳（base 镜像）：没有主进程可代理。catch-all 直接 404，而不是 502——
+    # 502 会让"忘了设 NXAS_TARGET_CMD"看起来像故障，404 是明确的"这里没应用"。
+    export NXAS_CATCHALL_BODY='        return 404;'
+    echo "[entrypoint] 纯权限壳：catch-all 返回 404（派生镜像设 NXAS_TARGET_CMD 后自动代理主进程）"
+  else
+    export NXAS_CATCHALL_BODY='        auth_request /_nxas/auth-internal;
         auth_request_set $nxas_device $upstream_http_x_device_id;
         auth_request_set $nxas_cred $upstream_http_x_auth_cred;
         error_page 401 = @nxas_login;
@@ -76,6 +82,7 @@ if [ "$CATCHALL_AUTH" = "1" ]; then
         proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Auth-Cred $nxas_cred;
         add_header X-Nxas-Device $nxas_device always;'
+  fi
 else
   export NXAS_CATCHALL_BODY='        proxy_pass http://127.0.0.1:__TARGET_PORT__;
         proxy_set_header Host $http_host;
