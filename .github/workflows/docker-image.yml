@@ -1,19 +1,27 @@
 name: Docker image
 
-# 镜像构建 → docker save 压缩包 → artifact；打了 v* tag 时顺带部署到 47 服务器（docker load，不走 registry）
+# 双镜像构建 → 推 GHCR（GitHub 的 Docker 镜像仓库）+ artifact 分发；
+# 打了 v* tag 时把 full 镜像部署到 47 服务器（docker load，不走 registry——47 拉 GHCR 私有包需额外登录）
+#
+#   nx-as-base  —— 纯权限壳（nginx + nx-as，无主程序），供 `FROM ghcr.io/on-devplan/nx-as-base` 派生
+#   nx-as       —— 默认产品形态（base + pi-web 主进程）
 on:
   push:
     tags: ['v*']
-  workflow_dispatch:        # 手动触发：只构建 + 上传 artifact，不部署
+  workflow_dispatch:        # 手动触发：只构建 + 上传 artifact + 推 GHCR，不部署
     inputs:
       deploy:
         description: '同时部署到 47 服务器'
         type: boolean
         default: false
 
+permissions:
+  contents: read
+  packages: write           # 推 GHCR 需要
+
 jobs:
   build:
-    name: Build image & package
+    name: Build images & package
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.meta.outputs.version }}
@@ -27,30 +35,93 @@ jobs:
           V=$(node -p "require('./package.json').version")
           echo "version=$V" >> $GITHUB_OUTPUT
           echo "image_tag=nx-as:$V" >> $GITHUB_OUTPUT
-          echo "构建 nx-as:$V"
+          echo "构建 nx-as:$V + nx-as-base:$V（GHCR 双镜像）"
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build image
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: GHCR 镜像名（小写归一）
+        id: ghcr
+        run: |
+          OWNER=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          echo "base=ghcr.io/${OWNER}/nx-as-base" >> $GITHUB_OUTPUT
+          echo "full=ghcr.io/${OWNER}/nx-as" >> $GITHUB_OUTPUT
+
+      # ── base：纯权限壳。单独一步构建，保证 base 产物不依赖 pi-web 层 ──
+      - name: Build & push base 镜像（无主程序）
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
-          load: true                       # 留在本地 docker 供 save（不 push）
+          target: base
+          load: true                       # 留在本地供冒烟（不 push 时也能测）
+          push: true
           tags: |
+            ${{ steps.ghcr.outputs.base }}:${{ steps.meta.outputs.version }}
+            ${{ steps.ghcr.outputs.base }}:latest
+            nx-as-base:${{ steps.meta.outputs.version }}
+            nx-as-base:local
+          cache-from: type=gha,scope=base
+          cache-to: type=gha,mode=max,scope=base
+
+      - name: 冒烟：base 镜像（无主进程也要能起）
+        run: |
+          set +e
+          docker run -d --name smoke-base -p 18090:8080 nx-as-base:local
+          ok=false
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18090/_nxas/api/auth/verify 2>/dev/null)
+            if [ -n "$code" ] && [ "$code" != "000" ] && [ "$code" -lt 500 ]; then ok=true; break; fi
+            sleep 2
+          done
+          if [ "$ok" != true ]; then
+            echo "::error::base 镜像 120s 内未就绪"
+            docker logs smoke-base --tail 60
+            docker rm -f smoke-base
+            exit 1
+          fi
+          echo "--- base 管理面探活 ---"
+          curl -s http://127.0.0.1:18090/_nxas/api/auth/verify; echo
+          echo "--- base 日志应含「纯权限壳模式」 ---"
+          docker logs smoke-base 2>&1 | grep -q '纯权限壳模式' || { echo "::error::base 未进入纯权限壳模式"; docker logs smoke-base --tail 30; docker rm -f smoke-base; exit 1; }
+          echo "--- 匿名 /（无主进程 → 502/302 均可，不可 500 崩溃）---"
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Accept: text/html' http://127.0.0.1:18090/)
+          echo "HTTP $code"
+          docker rm -f smoke-base
+          [ "$code" != "000" ] || { echo "::error::base 匿名 / 无响应"; exit 1; }
+          echo "✅ base 镜像契约通过（网关就绪 + 纯权限壳模式）"
+
+      # ── full：base + pi-web。与 base 共享缓存，只多 pi-web 层 ──
+      - name: Build & push full 镜像（base + pi-web）
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          target: full
+          load: true
+          push: true
+          tags: |
+            ${{ steps.ghcr.outputs.full }}:${{ steps.meta.outputs.version }}
+            ${{ steps.ghcr.outputs.full }}:latest
             ${{ steps.meta.outputs.image_tag }}
             nx-as:local
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=full
+          cache-to: type=gha,mode=max,scope=full
 
-      - name: 冒烟：容器能起、面板可达
+      - name: 冒烟：full 镜像（容器能起、面板可达、路径契约）
         run: |
           set +e   # 冒烟步骤禁用 -e：curl 4xx 是预期（匿名 401），用退出码断言
           docker run -d --name smoke -p 18080:8080 -e NX_AS_TOKEN=smoketoken nx-as:local
           ok=false
           for i in $(seq 1 90); do
-            # v0.6 路径契约：nx-as 全在 /_nxas/*（唯一命名空间）
+            # 路径契约：nx-as 全在 /_nxas/*（唯一命名空间）
             # 任意 <500 的响应都说明 nginx + nx-as 已就绪（200=管理面，302=引导登录页）
             code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/_nxas/api/auth/verify 2>/dev/null)
             if [ -n "$code" ] && [ "$code" != "000" ] && [ "$code" -lt 500 ]; then ok=true; break; fi
@@ -64,17 +135,25 @@ jobs:
           fi
           echo "--- nx-as 管理面探活 ---"
           curl -s http://127.0.0.1:18080/_nxas/api/auth/verify; echo
+          echo "--- 主进程已拉起（pi-web 就绪日志）---"
+          docker logs smoke 2>&1 | grep -q '启动主进程' || { echo "::error::full 镜像未启动 pi-web 主进程"; docker logs smoke --tail 40; docker rm -f smoke; exit 1; }
           echo "--- 匿名 /（应 302 到 /_nxas/login）---"
           code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Accept: text/html' http://127.0.0.1:18080/)
           echo "HTTP $code"
           echo "--- 匿名 /_nxas/m/v1/sessions（应 401）---"
           code2=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/_nxas/m/v1/sessions)
           echo "HTTP $code2"
-          docker logs smoke --tail 30   # 顺便看容器内 nx-as/pi-web 启动状态
+          docker logs smoke --tail 30
           docker rm -f smoke
           [ "$code" = "302" ] || { echo "::error::匿名 / 应 302 登录页，实得 $code"; exit 1; }
           [ "$code2" = "401" ] || { echo "::error::匿名 API 应 401，实得 $code2"; exit 1; }
-          echo "✅ v0.6 路径契约验证通过（/ → 302 登录页；/_nxas/m/v1 → 401）"
+          echo "✅ full 镜像契约验证通过（/ → 302 登录页；/_nxas/m/v1 → 401）"
+
+      - name: 打印 GHCR 推送结果
+        run: |
+          echo "### GHCR 镜像" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ steps.ghcr.outputs.base }}:${{ steps.meta.outputs.version }}\` （纯权限壳，FROM 派生用）" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ steps.ghcr.outputs.full }}:${{ steps.meta.outputs.version }}\` （含 pi-web，直接运行）" >> $GITHUB_STEP_SUMMARY
 
       - name: docker save + gzip
         run: |

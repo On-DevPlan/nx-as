@@ -1,15 +1,16 @@
 #!/bin/sh
-# nx-as 基础镜像 entrypoint（v0.6）
+# nx-as 基础镜像 entrypoint（v0.7）
 #
 # 设计：nx-as + nginx 是「权限中间件底座」，主进程可替换。
-#   默认主进程 = pi-web（@agegr/pi-web）；用户可用 NXAS_TARGET_CMD 换成自己的应用
-#   （在自己的 Dockerfile 里 FROM nx-as-sidecar 然后装应用、设环境变量）。
+#   base 镜像：纯权限壳（NXAS_TARGET_CMD 为空，只跑 nx-as 网关 + nginx）
+#   full 镜像：ENV 默认 NXAS_TARGET_CMD = pi-web
+#   派生镜像：FROM base 后设 NXAS_TARGET_CMD / NXAS_TARGET_PORT / NXAS_PROTECT 接入自有应用
 #
 # 进程编排：
 #   1. 物化机机密码（store.machineSecret，与 pi-web PI_WEB_PASSWORD 同源）
 #   2. 渲染 nginx.conf（NXAS_PROTECT → auth_request 路径 / catch-all 是否鉴权）
-#   3. 启动 nx-as 网关（鉴权决策 + 管理面 + 配对）
-#   4. 启动主进程（NXAS_TARGET_CMD，默认 pi-web）
+#   3. 启动 nx-as 网关（鉴权决策 + 管理面）
+#   4. 启动主进程（NXAS_TARGET_CMD；为空则跳过——base 形态）
 #   5. nginx 前台（容器生命周期跟随）
 set -e
 
@@ -25,10 +26,11 @@ export NXAS_LISTEN_PORT="${NXAS_LISTEN_PORT:-8080}"     # 对外端口（nginx�
 export NXAS_API_PORT="${NXAS_API_PORT:-7801}"           # nx-as 网关端口（内部）
 export NXAS_TARGET_PORT="${NXAS_TARGET_PORT:-30141}"    # 主进程端口（默认 pi-web）
 export NXAS_PROTECT="${NXAS_PROTECT:-/*}"               # 需鉴权的路径（空格分隔；默认全部）
-# 主进程命令：默认 pi-web（装进镜像）；用户可覆盖成自己的应用
-export NXAS_TARGET_CMD="${NXAS_TARGET_CMD:-nx-as web --port ${NXAS_TARGET_PORT} --no-open}"
+# 主进程命令：base 镜像为空（纯权限壳，无主进程）；full 镜像 ENV 给了 pi-web 默认值；
+# 派生镜像用 ENV NXAS_TARGET_CMD 指向自己的应用
+export NXAS_TARGET_CMD="${NXAS_TARGET_CMD:-}"
 export NXAS_TARGET_AUTH_HEADER="${NXAS_TARGET_AUTH_HEADER:-}"  # 上游需 Basic 时填（pi-web 由 launcher 注入，这里留空）
-export NXAS_TARGET_ENV_PIWEB="${NXAS_TARGET_ENV_PIWEB:-1}"     # 1=默认 pi-web 模式（机机密码注入）
+export NXAS_TARGET_ENV_PIWEB="${NXAS_TARGET_ENV_PIWEB:-1}"     # 1=pi-web 模式（机机密码注入）；非 pi-web 主进程设 0
 
 # ---------- 1. 机机密码 ----------
 SECRET=$(node /app/docker/secret-init.mjs 2>/tmp/secret-init.err)
@@ -105,24 +107,31 @@ until wget -q -O /dev/null "http://127.0.0.1:${NXAS_API_PORT}/api/auth/verify" 2
   sleep 1
 done
 
-# ---------- 5. 主进程（默认 pi-web；NXAS_TARGET_CMD 可覆盖） ----------
-if [ "$NXAS_TARGET_ENV_PIWEB" = "1" ]; then
-  # pi-web 模式：PI_WEB_PASSWORD 与 store.machineSecret 同源（nx-as launcher 会注入；这里兜底）
-  export PI_WEB_PASSWORD="${PI_WEB_PASSWORD:-$SECRET}"
+# ---------- 5. 主进程（full=pi-web；base 为空；派生镜像指向自有应用） ----------
+TARGET_PID=""
+if [ -n "$NXAS_TARGET_CMD" ]; then
+  if [ "$NXAS_TARGET_ENV_PIWEB" = "1" ]; then
+    # pi-web 模式：PI_WEB_PASSWORD 与 store.machineSecret 同源（nx-as launcher 会注入；这里兜底）
+    export PI_WEB_PASSWORD="${PI_WEB_PASSWORD:-$SECRET}"
+  fi
+  echo "[entrypoint] 启动主进程: ${NXAS_TARGET_CMD}  (port ${NXAS_TARGET_PORT})"
+  sh -c "$NXAS_TARGET_CMD" &
+  TARGET_PID=$!
+else
+  echo "[entrypoint] NXAS_TARGET_CMD 为空——纯权限壳模式（base 镜像），不启动主进程"
+  echo "[entrypoint]   作为基础镜像：FROM ... 后设 ENV NXAS_TARGET_CMD + NXAS_TARGET_PORT"
 fi
-echo "[entrypoint] 启动主进程: ${NXAS_TARGET_CMD}  (port ${NXAS_TARGET_PORT})"
-sh -c "$NXAS_TARGET_CMD" &
-TARGET_PID=$!
 
 # ---------- 6. nginx 前台 ----------
-trap 'echo "[entrypoint] SIGTERM, shutting down"; kill $TARGET_PID $NXAS_PID 2>/dev/null; nginx -s quit 2>/dev/null; exit 0' TERM INT
+trap '[ -n "$TARGET_PID" ] && kill $TARGET_PID 2>/dev/null; kill $NXAS_PID 2>/dev/null; nginx -s quit 2>/dev/null; exit 0' TERM INT
 echo "[entrypoint] nginx 监听 :${NXAS_LISTEN_PORT}"
 nginx -g "daemon off;" &
 NGINX_PID=$!
 while kill -0 "$NGINX_PID" 2>/dev/null && kill -0 "$NXAS_PID" 2>/dev/null; do
   sleep 5
 done
-echo "[entrypoint] 进程退出（nginx=$NGINX_PID nxas=$NXAS_PID target=$TARGET_PID），容器结束"
-kill $TARGET_PID $NXAS_PID 2>/dev/null || true
+echo "[entrypoint] 进程退出（nginx=$NGINX_PID nxas=$NXAS_PID target=${TARGET_PID:-无}），容器结束"
+[ -n "$TARGET_PID" ] && kill $TARGET_PID 2>/dev/null
+kill $NXAS_PID 2>/dev/null || true
 nginx -s quit 2>/dev/null || true
 exit 0

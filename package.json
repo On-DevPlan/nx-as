@@ -1,7 +1,7 @@
 {
   "name": "nx-as",
-  "version": "0.7.0",
-  "description": "nx-apiserver — auth gateway & safe launcher for pi-web personal agent: device tokens, pairing, throttled proxy",
+  "version": "0.7.1",
+  "description": "nx-apiserver — auth gateway & safe launcher base image (nginx + nx-as); any target process behind one login",
   "type": "module",
   "bin": {
     "nx-as": "bin/nx-as.mjs"

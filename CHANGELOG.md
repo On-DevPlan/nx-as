@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.7.1 (2026-09-29)
+
+**基础镜像双形态 + GHCR 分发**：同一个 Dockerfile 出两个 target——`base`（纯权限壳）与 `full`（base + pi-web），CI 同时构建并推送到 GHCR。
+
+### Added
+
+- **Dockerfile 多 target**：`runtime-common`（nginx + nx-as）→ `base`（无主程序）→ `full`（+ pi-web）。
+  派生镜像 `FROM ghcr.io/on-devplan/nx-as-base` 后设 `NXAS_TARGET_CMD` / `NXAS_TARGET_PORT` /
+  `NXAS_PROTECT` / `NXAS_TARGET_ENV_PIWEB=0` 即可给自己的应用套上鉴权网关。
+- **GHCR 发布**：CI 推 `ghcr.io/on-devplan/nx-as-base` 与 `ghcr.io/on-devplan/nx-as`（version + latest）；
+  47 部署仍走 artifact docker load（不依赖 47 能拉私有 GHCR 包）。
+- base 镜像冒烟断言：网关就绪 + 日志含「纯权限壳模式」+ 匿名 `/` 不崩。
+
+### Fixed
+
+- **短票通道注入机机 Basic**（线上实测：短票签发/验证/消费全正常，但上游 pi-web 认 Basic/cookie，
+  短票通道此前**从未真正打通**）。票在 `decide()` 一次性消费 + 会话绑定，本身即授权证明；
+  注入的 Basic 只进上游请求头、不回传客户端，安全边界不变。手机端 EventSource 从此可用。
+- **`docker-image.yml` retag 硬编码 `0.4.1`**：0.7.0 artifact load 后被旧镜像覆盖 tag，
+  47 起的仍是旧版 → 新模板占位符不被旧 entrypoint 渲染 → nginx 重启循环。改为按版本号 retag。
+- **cert 单测不再依赖 openssl CLI**（ubuntu-24.04 runner 不带，`spawnSync ENOENT` 曾拦死发版）：
+  改用提交进仓库的静态 PEM fixture（`tests/fixtures/`）。
+- **compose 去掉 nginx 模板挂载**：镜像自带正确版本，外挂旧模板正是版本漂移雷的根源。
+
 ## 0.7.0 (2026-09-29)
 
 **基础镜像 + 零感知登录 + 单一命名空间**：nx-as 与 nginx 打包为基础镜像，主进程（默认 pi-web）可替换；nx-as 全部功能收进 `/_nxas/*` 一个前缀。

@@ -29,19 +29,15 @@ nx-as serve --with-web           # 网关 :7801 + pi-web :30141 一起拉起
 export NX_AS_TOKEN=管理密钥
 ```
 
-手机端三个动作就够：
+手机端两个动作就够：
 
 ```bash
 # 1. 服务器上直接签发 device token（SSH 执行）
 nx-as device issue --name "我的手机"
+# → token: nxas_d1.<id>.<secret>   secret 只出现这一次
 
-# 2. 手机用配对码兑换长期 device token（唯一免鉴权的网关路由）
-curl -X POST https://your-server/m/v1/pair -H "Content-Type: application/json" \
-  -d '{"code":"12345678"}'
-# → {"token":"nxas_d1.<id>.<secret>","device":{...}}   secret 只出现这一次
-
-# 3. 之后所有请求带 Bearer token，透明反代 pi-web
-curl -H "Authorization: Bearer nxas_d1..." https://your-server/m/v1/sessions
+# 2. 之后所有请求带 Bearer token（或浏览器粘贴一次 token 走 /_nxas/login）
+curl -H "Authorization: Bearer nxas_d1..." https://your-server/_nxas/m/v1/sessions
 ```
 
 ## /m/v1 网关 API
@@ -91,6 +87,40 @@ SSE 用 EventSource 连接时不能带自定义 header：先 `POST /m/v1/session
 
 **部署红线**：pi-web 的 30141 只听 127.0.0.1，绝不暴露公网（其终端/bash 等于 RCE）；
 nginx 模式下公网流量全部经 nginx 直代，nx-as 只接 loopback。
+
+## Docker 镜像（两个 target）
+
+CI 同时构建并推送到 GHCR 两个镜像，**同一个 Dockerfile 的 base / full 两个 target**（层共享）：
+
+| 镜像 | 内容 | 用途 |
+|---|---|---|
+| `ghcr.io/on-devplan/nx-as-base` | nginx + nx-as，**无主程序** | 权限中间件底座，`FROM` 它派生自己的应用 |
+| `ghcr.io/on-devplan/nx-as` | base + pi-web | 直接运行（开箱即用的个人 agent server） |
+
+```bash
+# 开箱即用（带 pi-web）
+docker run -d -p 8080:8080 -v nxas-data:/data ghcr.io/on-devplan/nx-as:0.7.1
+
+# 作为基础镜像：给自有应用套上鉴权网关
+# FROM ghcr.io/on-devplan/nx-as-base:0.7.1
+# COPY myapp /app/myapp
+# ENV NXAS_TARGET_CMD="node /app/myapp/server.js" \
+#     NXAS_TARGET_PORT=5000 \
+#     NXAS_PROTECT="/api/* /admin/*" \
+#     NXAS_TARGET_ENV_PIWEB=0
+```
+
+**登录后零感知**：nx-as 只占 `/_nxas/*` 一个命名空间；主程序的路径、头部、cookie 全部原样
+（`NXAS_PROTECT` 外的路径公开直通，命中路径走 auth_request 鉴权后直代主进程）。
+不设 `NXAS_TARGET_CMD` 时就是纯权限壳（只跑网关 + nginx）。
+
+| 环境变量 | 默认 | 说明 |
+|---|---|---|
+| `NXAS_TARGET_CMD` | full 镜像=`nx-as web --port 30141 --no-open`；base 镜像=空 | 主进程命令；空=纯权限壳 |
+| `NXAS_TARGET_PORT` | `30141` | 主进程监听端口 |
+| `NXAS_PROTECT` | `/*` | 需鉴权的路径（空格分隔）；其余公开直通 |
+| `NXAS_LISTEN_PORT` | `8080` | 对外端口（nginx） |
+| `NXAS_TARGET_ENV_PIWEB` | `1` | 1=按 pi-web 注入机机密码；自有应用设 `0` |
 
 ## 部署（nginx 拓扑，Linux 服务器）
 

@@ -1,17 +1,21 @@
-# nx-as 基础镜像（v0.6）：nginx（入口）+ nx-as（鉴权中间件）+ 默认主进程 pi-web
+# nx-as 基础镜像（v0.7.1）：nginx（入口）+ nx-as（权限中间件）双目标
 #
-# 用法一（自带 pi-web）：
-#   docker run -p 8080:8080 -v nxas-data:/data nx-as-sidecar:0.6
+# 两个 target（同一个 Dockerfile，层共享）：
+#   base —— 纯权限壳：nginx + nx-as，**不含任何主程序**。
+#            供他人 `FROM ghcr.io/on-devplan/nx-as-base` 封装自有应用：
+#              FROM ghcr.io/on-devplan/nx-as-base:0.7.1
+#              COPY myapp /app/myapp
+#              ENV NXAS_TARGET_CMD="node /app/myapp/server.js" \
+#                  NXAS_TARGET_PORT=5000 \
+#                  NXAS_PROTECT="/api/* /admin/*"
+#            （不加主进程也能跑：只提供 nginx 入口 + nx-as 的 /_nxas/* 鉴权面）
+#   full —— 默认产品形态：FROM base + 内嵌 pi-web 作为主进程（会话运行时）。
 #
-# 用法二（作为基础镜像，换主进程）：
-#   FROM nx-as-sidecar:0.6
-#   RUN apk add --no-cache python3 && pip3 install flask ...
-#   ENV NXAS_TARGET_CMD="python3 /app/myapp.py" \
-#       NXAS_TARGET_PORT=5000 \
-#       NXAS_PROTECT="/api/* /admin/*"
+# 构建：
+#   docker build --target base -t nx-as-base:local .
+#   docker build --target full -t nx-as:local .
 #
-# 多阶段构建：builder 装 devDeps + 构建面板 + 装 pi-web；runtime 只拷产物。
-# 构建产物经 docker save 分发（不走 registry）。
+# 多阶段：builder 装 devDeps + 构建面板 +（仅 full 需要）装 pi-web；runtime 只拷产物。
 
 # ── Stage 1: builder ──────────────────────────────────────────────────
 FROM node:22-alpine AS builder
@@ -27,11 +31,13 @@ RUN npm install --no-audit --no-fund \
     && npm prune --omit=dev
 
 # 默认主进程 pi-web（Next.js 全家桶 ~200MB；锁版本保证 gateway 契约）
-# import.meta.resolve 不读 NODE_PATH，建软链让 /app/src 能找到全局的 @agegr
+# 仅 full 目标会 COPY 这层——base 目标不引用它，构建 base 时不产生额外下载成本
+# （buildx 报 unused stage 属正常，不影响产物）
+FROM node:22-alpine AS builder-web
 RUN npm install -g @agegr/pi-web@0.9.3 --no-audit --no-fund
 
-# ── Stage 2: runtime ──────────────────────────────────────────────────
-FROM node:22-alpine
+# ── Stage 2: runtime 公共层（nginx + nx-as）────────────────────────────
+FROM node:22-alpine AS runtime-common
 
 RUN apk add --no-cache nginx openssl tini gettext \
     && mkdir -p /run/nginx /etc/nginx/ssl /etc/nginx/http.d /data
@@ -42,10 +48,6 @@ COPY --from=builder /build/src /app/src
 COPY --from=builder /build/node_modules /app/node_modules
 COPY --from=builder /build/assets /app/assets
 COPY --from=builder /build/package.json /app/package.json
-
-# 默认主进程 pi-web 全局包（软链到 /app/node_modules 供 import.meta.resolve 找到）
-# 用户换主进程时这层仍保留（无害），只是不再被 NXAS_TARGET_CMD 调用
-COPY --from=builder /usr/local/lib/node_modules/@agegr /app/node_modules/@agegr
 
 # 容器部署件
 COPY docker/entrypoint.sh /entrypoint.sh
@@ -68,8 +70,23 @@ ENV NXAS_NGINX_SUDO=0 \
     NXAS_LISTEN_PORT=8080 \
     NXAS_API_PORT=7801 \
     NXAS_TARGET_PORT=30141 \
-    NXAS_PROTECT=/* \
-    NXAS_TARGET_CMD="nx-as web --port 30141 --no-open"
+    NXAS_PROTECT=/*
 
-# 作为基础镜像时的默认命令（用户覆盖 NXAS_TARGET_CMD 即可换主进程）
+# ── Target: base —— 纯权限壳（无主进程）────────────────────────────────
+# 不设 NXAS_TARGET_CMD：entrypoint 跳过主进程，只跑 nx-as 网关 + nginx。
+# 派生镜像用 ENV NXAS_TARGET_CMD / NXAS_TARGET_PORT / NXAS_PROTECT 定制。
+FROM runtime-common AS base
+
+# 该变量在运行时为空 → base 是「待接入主进程」形态；派生镜像覆盖它
+ENV NXAS_TARGET_CMD=""
+
 ENTRYPOINT ["/sbin/tini", "--", "/entrypoint.sh"]
+
+# ── Target: full —— base + pi-web 主进程（默认产品形态）────────────────
+FROM base AS full
+
+# pi-web 全局包（软链到 /app/node_modules 供 import.meta.resolve 找到）
+COPY --from=builder-web /usr/local/lib/node_modules/@agegr /app/node_modules/@agegr
+
+# nx-as web 启动器默认值：拉起 pi-web
+ENV NXAS_TARGET_CMD="nx-as web --port 30141 --no-open"
