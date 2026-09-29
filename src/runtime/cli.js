@@ -4,7 +4,7 @@ import { VERSION } from '../core/version.js';
 import { ACTIONS } from '../index.js';
 
 export { VERSION };
-export const MODULE_IDS = ['auth', 'cert', 'gateway', 'nginx', 'settings', 'system'];
+export const MODULE_IDS = ['auth', 'cert', 'gateway', 'nginx', 'system'];
 
 // ---------- 平台命令（不属于任何业务域；与模块 action 合成同一张 ALL_COMMANDS） ----------
 
@@ -21,9 +21,6 @@ async function cmdServe(ctx) {
   const { setRuntimeToken } = await import('./api.js');
   setRuntimeToken(token);
 
-  // 每次启动重写 Bearer 扩展（配置改了重启即生效）
-  const { writeBearerExtension, bearerConfig } = await import('../modules/gateway/extensions.js');
-  await writeBearerExtension().catch((e) => console.error('[nx-as] 生成 Bearer 扩展失败:', e.message));
 
   const displayHost = host === '0.0.0.0' ? '0.0.0.0' : host;
   console.log(`网关:   http://${displayHost}:${port}   (/m/v1/* 反代 pi-web，device token 鉴权)`);
@@ -31,13 +28,6 @@ async function cmdServe(ctx) {
   console.log(`控制台: http://${displayHost}:${port}/?token=${token}   (带密钥直达，可收藏)`);
   console.log(`密钥:   ${token}`);
   console.log(`(管理面 /api/* 走上述密钥；网关 /_nxas/m/v1/* 走 device token：nx-as device issue --name <设备名>)`);
-  // Bearer-auth 提示（从 store 读，面板/CLI 可配）
-  const bc = await bearerConfig();
-  if (bc.token && bc.baseUrl) {
-    console.log(`Bearer: ${bc.provider} → ${bc.baseUrl}  模型=${bc.models.join(',')}`);
-  } else {
-    console.log(`Bearer: (未配置；面板「设置」页或 nx-as settings set --bearer-base-url ... 配置后可用 Anthropic 兼容代理)`);
-  }
   console.log('提示:   模型/插件/技能管理在 pi-web 自带设置页（http://127.0.0.1:30141 或经网关 Web UI）；扩展装入 ~/.nx-as/pi-agent/extensions/');
 
   // --with-web：顺带拉起 pi-web（安全启动器：随机 PI_WEB_PASSWORD，只听 127.0.0.1）

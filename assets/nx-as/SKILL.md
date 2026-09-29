@@ -28,7 +28,6 @@ CLI 与管理 API 同源（一条 action 两端暴露）。
 | `nx-as web [--port 30141] [--no-open]` | 只拉起 pi-web（安全启动器：随机 PI_WEB_PASSWORD + PI_CODING_AGENT_DIR） |
 | `nx-as device issue --name <设备名>` | 直接签发 device token（管理员线下交付） |
 | `nx-as device list` / `device revoke <id>` | 设备清单 / 吊销（立即 401） |
-| `nx-as settings get` / `settings set [--bearer-base-url ... --bearer-token ... --bearer-models ...]` | Bearer 代理配置（物化为 pi 扩展） |
 | `nx-as auth status` / `auth rotate` | 管理密钥状态（掩码）/ 轮换 |
 | `nx-as health` / `bootstrap --json` / `routes [--http "METHOD /path"]` | 排查 / 上下文 / 命令-路由对照 |
 | `nx-as skill install [name] [--to DIR] [--force]` | 装 skill 到 ~/.claude/skills |

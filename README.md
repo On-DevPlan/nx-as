@@ -69,7 +69,6 @@ SSE 用 EventSource 连接时不能带自定义 header：先 `POST /m/v1/session
 | `nx-as device issue --name <设备名>` | 直接签发 device token（线下交付） |
 | `nx-as device list` / `device revoke <id>` | 设备清单 / 吊销（下一次请求即 401） |
 | `nx-as nginx status` / `config [--preview]` / `apply` / `rollback` / `setup` / `rotate-secret` | nginx 托管：状态/配置/应用（nginx -t+reload）/回滚/部署引导/轮换机机密码 |
-| `nx-as settings get/set` | Bearer 代理配置（物化为 pi 扩展） |
 | `nx-as auth status/rotate` | 管理密钥 |
 | `nx-as health` / `bootstrap --json` / `routes` / `help [主题]` | 排查与自省 |
 | `nx-as skill install` / `skill get` | 给 agent 装/导出使用文档 |
@@ -124,9 +123,6 @@ Apply 自动 `nginx -t`、失败回滚、成功 graceful reload；「轮换机�
 - pi-web 会话读取 `~/.nx-as/pi-agent/`（`PI_CODING_AGENT_DIR` 隔离，与用户 `~/.pi` 互不干扰）：
   扩展、技能、`models.json`、会话 JSONL 都在这里
 - **模型/插件/技能管理全在 pi-web 自带设置页**（浏览器打开 pi-web 或经网关 Web UI 入口），nx-as 不重复建设
-- Bearer 代理（MiniMax 等 Anthropic 兼容端点）是网关代管的唯一模型配置：面板「设置」或
-  `nx-as settings set --bearer-base-url ... --bearer-token ... --bearer-models ...`
-  —— 每次启动自动生成 `nx-as-bearer-anthropic` 扩展注入 pi
 - pi **没有 MCP 支持**；工具接入走 pi 扩展的 `registerTool()`（LLM 可直接调用，
   且自动被 `tool_call` 权限拦截覆盖）
 

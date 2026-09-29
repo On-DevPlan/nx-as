@@ -6,7 +6,6 @@ export const MODULES = [
   { id: 'cert', view: true },
   { id: 'gateway', view: false },
   { id: 'nginx', view: true },
-  { id: 'settings', view: true },
   { id: 'system', view: false },
 ];
 

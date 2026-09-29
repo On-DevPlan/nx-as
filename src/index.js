@@ -5,9 +5,8 @@ export { default as auth } from './modules/auth/index.js';
 export { default as cert } from './modules/cert/index.js';
 export { default as gateway } from './modules/gateway/index.js';
 export { default as nginx } from './modules/nginx/index.js';
-export { default as settings } from './modules/settings/index.js';
 export { default as system } from './modules/system/index.js';
 
-import { auth, cert, gateway, nginx, settings, system } from './modules/index.js';
+import { auth, cert, gateway, nginx, system } from './modules/index.js';
 
-export const ACTIONS = [...auth.actions, ...cert.actions, ...gateway.actions, ...nginx.actions, ...settings.actions, ...system.actions];
+export const ACTIONS = [...auth.actions, ...cert.actions, ...gateway.actions, ...nginx.actions, ...system.actions];

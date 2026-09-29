@@ -83,10 +83,9 @@ test('store: 事务抛错不落盘（structuredClone 隔离）', async () => {
 });
 test('store: normalize 补默认字段，容忍旧 store 的多余字段（向前兼容）', async () => {
   resetStoreCache();
-  await saveStore({ version: 1, settings: { bearerBaseUrl: 'https://x' }, devices: undefined });
+  await saveStore({ version: 1, devices: undefined });
   resetStoreCache();
   const s = await loadStore();
-  assert.equal(s.settings.bearerBaseUrl, 'https://x');
-  assert.equal(s.settings.bearerProvider, 'MiniMax', '缺省字段应补默认值');
-  assert.deepEqual(s.devices, []);
+  assert.deepEqual(s.devices, [], '缺省字段应补默认值');
+  assert.equal(s.machineSecret, '', 'machineSecret 缺省为空串');
 });

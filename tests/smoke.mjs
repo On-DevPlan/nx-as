@@ -83,13 +83,9 @@ try {
   const verifyBad = await req('GET', '/api/auth/verify', undefined, 'wrong');
   ok(verifyBad.data?.valid === false, 'verify 带错误 token → valid:false');
 
-  // 3. 设备管理 + settings
+  // 3. 设备管理（模型/Bearer 配置已移交 pi-web 自带设置页）
   const devices = await req('GET', '/api/devices');
   ok(devices.status === 200 && Array.isArray(devices.data), 'device list');
-  const st = await req('PATCH', '/api/settings', { 'bearer-base-url': 'https://x.test/anthropic' });
-  ok(st.data?.bearerBaseUrl === 'https://x.test/anthropic', 'settings set（PATCH 语义）');
-  const stBad = await req('PATCH', '/api/settings', { nope: 1 });
-  ok(stBad.status === 400, 'settings set 未知项 → 400');
   const health = await req('GET', '/api/health');
   ok(health.data?.ok === true, 'health');
   const boot = await req('GET', '/api/bootstrap');

@@ -9,14 +9,6 @@ export const fsp = _fsp;
 
 const EMPTY = () => ({
   version: 1,
-  settings: {
-    // Anthropic 兼容代理（MiniMax 等）的 Bearer 配置；
-    // 留空则回落到环境变量 NXAS_BEARER_*
-    bearerProvider: 'MiniMax',
-    bearerBaseUrl: '',
-    bearerModels: '',       // 逗号分隔
-    bearerToken: '',        // 明文落盘（与 auth.token 同级信任边界）
-  },
   auth: {
     token: '',              // 空表示未设置；serve 启动时若无 token 则生成
   },
@@ -38,7 +30,6 @@ function normalize(data) {
   const base = EMPTY();
   if (!data || typeof data !== 'object') return base;
   base.version = data.version ?? 1;
-  base.settings = { ...base.settings, ...(data.settings || {}) };
   base.auth = { ...base.auth, ...(data.auth || {}) };
   base.devices = Array.isArray(data.devices) ? data.devices : [];
   base.machineSecret = data.machineSecret || '';
