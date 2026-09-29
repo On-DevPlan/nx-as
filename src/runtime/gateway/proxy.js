@@ -123,12 +123,15 @@ async function _handleGateway(req, res, url) {
   }
 
   // ⑥ 审计 + 反代
-  // 短票通道（X-Auth-Cred: ticket，由 nginx auth_request 子请求带下来）不注入机机凭据：
-  // 票本身就是授权，而机机 Basic 必须只给「原请求已通过鉴权」的路径——两个入口都一致。
+  // 短票通道**也注入**机机 Basic：票已在 decide() 消费（一次性 + 会话绑定），本身即授权证明，
+  // 注入的 Basic 是 nx-as↔pi-web 的内部机机信任，不回传客户端。不注入的话上游
+  // pi-web /api/agent/:id/events 会 401（它认 Basic 或浏览器 cookie，二者都没有）——
+  // 短票通道实际上从来打不通（2026-09-29 线上实测确认）。安全边界不变：
+  // 客户端拿不到 Basic（只进上游请求头），且票仍只能打开「签发时绑定」的那个会话。
   const viaTicket = device.ticket === true
     || String(req.headers['x-auth-cred'] || '').toLowerCase() === 'ticket';
-  appendAudit({ action: 'gw.proxy', deviceId: device.id, detail: { method: req.method, path: url.pathname } }).catch(() => {});
-  return proxyToUpstream(req, res, upstreamPath, { withMachineAuth: !viaTicket });
+  appendAudit({ action: 'gw.proxy', deviceId: device.id, viaTicket, detail: { method: req.method, path: url.pathname } }).catch(() => {});
+  return proxyToUpstream(req, res, upstreamPath);
 }
 
 // ---------- 反代（流式管道） ----------
