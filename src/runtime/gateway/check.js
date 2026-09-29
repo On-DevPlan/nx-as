@@ -47,9 +47,14 @@ export async function decide({ authorization, cookieHeader, rawUri, ip = 'unknow
   // device token
   const device = await verifyDeviceToken(authorization);
   if (!device) {
-    const delay = recordFailure(`ip:${ip}`);
-    appendAudit({ action: 'gw.auth_fail', detail: { ip, path: rawUri } }).catch(() => {});
-    return { decision: 'deny-auth', retryAfterSec: Math.max(1, Math.ceil(delay / 1000)) };
+    // 有凭据但凭据错误 → 记节流；完全无凭据（未登录浏览）→ 静默拒绝不计数
+    // （页面加载几十个资源在登录前全部 401，若计数会把正常用户锁死）
+    if (authorization) {
+      const delay = recordFailure(`ip:${ip}`);
+      appendAudit({ action: 'gw.auth_fail', detail: { ip, path: rawUri } }).catch(() => {});
+      return { decision: 'deny-auth', retryAfterSec: Math.max(1, Math.ceil(delay / 1000)) };
+    }
+    return { decision: 'deny-auth', retryAfterSec: 0 };
   }
 
   // 认证后按 tokenId 查询（失效重放按设备封锁）
