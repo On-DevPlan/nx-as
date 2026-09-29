@@ -52,6 +52,11 @@ export function startServer({ port = 7801, host = '127.0.0.1' } = {}) {
           const { handleApi } = await import('./api.js');
           return await handleApi(req, res, innerUrl);
         }
+        // 管理面板：/_nxas/panel* → SPA 静态资源（面板自身有 TokenGate 管理密钥保护）
+        if (inner === '/panel' || inner.startsWith('/panel/')) {
+          const { serveStatic } = await import('./api.js');
+          return await serveStatic(inner === '/panel' ? '/' : inner.slice('/panel'.length), res);
+        }
         // 手机 API：/m/v1/* 全量走 gateway 逻辑（ticket/反代……）
         // 注意：nginx 模式下 gateway 的反代目标也是 pi-web /api/*，与 direct 一致
         if (inner === '/m/v1' || inner.startsWith('/m/v1/')) {
