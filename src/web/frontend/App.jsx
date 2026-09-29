@@ -41,7 +41,9 @@ function TokenGate({ children }) {
   const check = async (token) => {
     try {
       const headers = token ? { Authorization: `Bearer ${token}` } : {};
-      const res = await fetch('/api/auth/verify', { headers });
+      // nginx 模式面板挂在 /_nxas/ 下时管理面 API 走前缀；direct/直连时不变
+      const base = window.location.pathname.startsWith('/_nxas') ? '/_nxas' : '';
+      const res = await fetch(base + '/api/auth/verify', { headers });
       const data = await res.json();
       if (data.valid) {
         localStorage.setItem('nxas_token', token);
