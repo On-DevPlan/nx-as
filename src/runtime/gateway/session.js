@@ -55,10 +55,43 @@ export async function handleLogin(req, res) {
       return res.end(JSON.stringify({ ok: false, error: 'token 无效', code: 'UNAUTHORIZED' }));
     }
     const { value, maxAgeSec } = issueSessionCookie(device.id);
+    const cookies = [
+      `${SESSION_COOKIE}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}`,
+    ];
+
+    // 上游会话自动交接（0 感知登录）：主进程需要密码时，nx-as 用机机信任代签，
+    // 浏览器无需知道主程序密码。当前实现针对 pi-web（POST /api/web-auth）。
+    // 通用性：NXAS_BOOTSTRAP_PATH + NXAS_BOOTSTRAP_BODY 可指向任意上游登录端点。
+    if (process.env.NXAS_BOOTSTRAP !== '0') {
+      try {
+        const upstreamPort = process.env.NXAS_TARGET_PORT || '30141';
+        const bootstrapPath = process.env.NXAS_BOOTSTRAP_PATH || '/api/web-auth';
+        const { loadStore } = await import('../../core/store.js');
+        const store = await loadStore();
+        const secret = store.machineSecret || '';
+        const r = await fetch(`http://127.0.0.1:${upstreamPort}${bootstrapPath}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Host: `127.0.0.1:${upstreamPort}`,
+          },
+          body: JSON.stringify({ password: secret }),
+        });
+        const setCookie = r.headers.getSetCookie?.() || [];
+        for (const c of setCookie) cookies.push(c.replace(/;\s*$/, ''));
+        if (setCookie.length) {
+          console.log(`[nx-as] bootstrap: 上游会话已代签（${bootstrapPath}，${setCookie.length} cookie）`);
+        }
+      } catch (e) {
+        // 主程序不支持 bootstrap（非 pi-web / 无需登录）——静默跳过，不影响 nx-as 登录
+        console.log(`[nx-as] bootstrap 跳过（上游无会话端点）：${e.message}`);
+      }
+    }
+
     res.writeHead(200, {
       'Content-Type': 'application/json; charset=utf-8',
       'Cache-Control': 'no-store',
-      'Set-Cookie': `${SESSION_COOKIE}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}`,
+      'Set-Cookie': cookies,
     });
     res.end(JSON.stringify({ ok: true, device: { id: device.id, name: device.name } }));
   });
@@ -90,6 +123,8 @@ async function doLogin(){
     const base = location.pathname.startsWith('/_nxas') ? '/_nxas' : '';
     const r=await fetch(base+'/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:document.getElementById('t').value.trim()})});
     if(!r.ok){const j=await r.json().catch(()=>({})); e.textContent=j.error||('HTTP '+r.status); return;}
+    // 登录成功：浏览器已同时拿到 nx-as 会话 cookie 和上游（主程序）会话 cookie
+    // —— 直接回原路径，主程序不该再拦（0 感知）
     location.href=${JSON.stringify(safeNext)};
   }catch(err){e.textContent=String(err)}
 }
