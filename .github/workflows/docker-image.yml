@@ -50,8 +50,9 @@ jobs:
           docker run -d --name smoke -p 18080:8080 -e NX_AS_TOKEN=smoketoken nx-as:local
           ok=false
           for i in $(seq 1 60); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/auth/verify 2>/dev/null)
-            # 200 = direct 直达；302 = nginx 模式匿名被引导登录页（服务就绪的另一种表现）
+            # v0.6 路径契约：nx-as 全在 /_nxas/*（唯一命名空间）
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/_nxas/api/auth/verify 2>/dev/null)
+            # 200 = nx-as 管理面可达（服务就绪）；302 = 被引导登录页（也说明网关活着）
             if [ "$code" = "200" ] || [ "$code" = "302" ]; then ok=true; break; fi
             sleep 2
           done
@@ -61,13 +62,18 @@ jobs:
             docker rm -f smoke
             exit 1
           fi
-          echo "--- 鉴权面探活 ---"
-          curl -s http://127.0.0.1:18080/api/auth/verify; echo
-          echo "--- 匿名 /m/v1/sessions 应 401 ---"
-          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/m/v1/sessions)
+          echo "--- nx-as 管理面探活 ---"
+          curl -s http://127.0.0.1:18080/_nxas/api/auth/verify; echo
+          echo "--- 匿名 /（应 302 到 /_nxas/login）---"
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Accept: text/html' http://127.0.0.1:18080/)
           echo "HTTP $code"
+          echo "--- 匿名 /_nxas/m/v1/sessions（应 401）---"
+          code2=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/_nxas/m/v1/sessions)
+          echo "HTTP $code2"
           docker logs smoke --tail 30   # 顺便看容器内 nx-as/pi-web 启动状态
           docker rm -f smoke
+          [ "$code" = "302" ] || { echo "::error::匿名 / 应 302 登录页，实得 $code"; exit 1; }
+          [ "$code2" = "401" ] || { echo "::error::匿名 API 应 401，实得 $code2"; exit 1; }
           # 401 = 网关正常拒绝；502 = pi-web 未就绪或 nx-as 错误；其余 = 异常
           case "$code" in
             401) echo "✅ 网关鉴权按预期拒绝" ;;
@@ -143,7 +149,7 @@ jobs:
             echo "健康检查..."
             ok=false
             for i in $(seq 1 60); do
-              if curl -fs http://127.0.0.1:18080/api/auth/verify >/dev/null 2>&1; then ok=true; break; fi
+              if curl -fs http://127.0.0.1:18080/_nxas/api/auth/verify >/dev/null 2>&1; then ok=true; break; fi
               sleep 2
             done
             if [ "$ok" != true ]; then
