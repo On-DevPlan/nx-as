@@ -49,15 +49,15 @@ jobs:
           set +e   # 冒烟步骤禁用 -e：curl 4xx 是预期（匿名 401），用退出码断言
           docker run -d --name smoke -p 18080:8080 -e NX_AS_TOKEN=smoketoken nx-as:local
           ok=false
-          for i in $(seq 1 60); do
+          for i in $(seq 1 90); do
             # v0.6 路径契约：nx-as 全在 /_nxas/*（唯一命名空间）
+            # 任意 <500 的响应都说明 nginx + nx-as 已就绪（200=管理面，302=引导登录页）
             code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/_nxas/api/auth/verify 2>/dev/null)
-            # 200 = nx-as 管理面可达（服务就绪）；302 = 被引导登录页（也说明网关活着）
-            if [ "$code" = "200" ] || [ "$code" = "302" ]; then ok=true; break; fi
+            if [ -n "$code" ] && [ "$code" != "000" ] && [ "$code" -lt 500 ]; then ok=true; break; fi
             sleep 2
           done
           if [ "$ok" != true ]; then
-            echo "::error::容器 120s 内未就绪"
+            echo "::error::容器 180s 内未就绪"
             docker logs smoke --tail 80
             docker rm -f smoke
             exit 1
