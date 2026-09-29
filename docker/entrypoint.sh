@@ -58,10 +58,10 @@ export NXAS_PROTECT_BLOCKS=$(cat /tmp/nxas-protect-blocks.conf)
 CATCHALL_AUTH=$(cat /tmp/nxas-catchall-auth.txt)
 
 if [ "$CATCHALL_AUTH" = "1" ]; then
-  export NXAS_CATCHALL_BODY='        auth_request /_nxas_auth;
+  export NXAS_CATCHALL_BODY='        auth_request /_nxas/auth-internal;
         auth_request_set $nxas_device $upstream_http_x_device_id;
         error_page 401 = @nxas_login;
-        proxy_pass http://127.0.0.1:${NXAS_TARGET_PORT};
+        proxy_pass http://127.0.0.1:__TARGET_PORT__;
         proxy_set_header Host $http_host;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_http_version 1.1;
@@ -71,7 +71,7 @@ if [ "$CATCHALL_AUTH" = "1" ]; then
         proxy_set_header X-Forwarded-For $remote_addr;
         add_header X-Nxas-Device $nxas_device always;'
 else
-  export NXAS_CATCHALL_BODY='        proxy_pass http://127.0.0.1:${NXAS_TARGET_PORT};
+  export NXAS_CATCHALL_BODY='        proxy_pass http://127.0.0.1:__TARGET_PORT__;
         proxy_set_header Host $http_host;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_http_version 1.1;
@@ -80,8 +80,11 @@ else
         proxy_read_timeout 1h;
         proxy_set_header X-Forwarded-For $remote_addr;'
 fi
+# 端口占位符二次替换（避免与 envsubst 的 nginx $变量 冲突）
+NXAS_CATCHALL_BODY=$(printf '%s' "$NXAS_CATCHALL_BODY" | sed "s/__TARGET_PORT__/${NXAS_TARGET_PORT}/g")
+export NXAS_CATCHALL_BODY
 
-envsubst '${NXAS_LISTEN_PORT} ${NXAS_API_PORT} ${NXAS_TARGET_PORT} ${NXAS_TLS_BLOCK} ${NXAS_PROTECT_BLOCKS} ${NXAS_CATCHALL_BODY}' \
+envsubst '${NXAS_LISTEN_PORT} ${NXAS_API_PORT} ${NXAS_TLS_BLOCK} ${NXAS_PROTECT_BLOCKS} ${NXAS_CATCHALL_BODY}' \
   < /etc/nginx/http.d/nx-as.conf.template > /etc/nginx/http.d/nx-as.conf
 echo "[entrypoint] nginx conf 已渲染（listen :${NXAS_LISTEN_PORT}；NXAS_PROTECT=${NXAS_PROTECT}；catch-all 鉴权=${CATCHALL_AUTH}）"
 nginx -t
