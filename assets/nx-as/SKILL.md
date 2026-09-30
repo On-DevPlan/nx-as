@@ -41,7 +41,7 @@ CLI 与管理 API 同源（一条 action 两端暴露）。
 |---|---|
 | 手机/设备接入：token 签发、`/m/v1/*` API、SSE 短票 | [references/01-gateway.md](01-gateway.md) |
 | Bearer 代理、装 pi 扩展/技能、权限扩展 | [references/03-extensions.md](03-extensions.md) |
-| **Docker 边车容器：`FROM nx-as-base` 给自有应用套鉴权网关** | [references/04-docker-sidecar.md](04-docker-sidecar.md) |
+| **Docker 边车容器：`FROM nx-as-base` 给自有应用套鉴权网关** | 独立 skill：`nx-as skill install nx-as-sidecar`（装后 agent 自动路由） |
 | 改代码、加功能域、理解分层 | [references/00-design.md](00-design.md) |
 
 ## 什么时候不用

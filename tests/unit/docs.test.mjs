@@ -12,16 +12,19 @@ const imp = (p) => import(pathToFileURL(join(ROOT, p)).href);
 const { matchCommandForTest } = await imp('src/runtime/cli.js');
 
 function skillFiles() {
-  const dir = join(ROOT, 'assets', 'nx-as');
+  // 扫 assets/ 下**所有** skill 目录（新独立 skill 也要纳入命令可解析性断言）
   const out = [];
-  function walk(p) {
-    for (const name of readdirSync(p)) {
-      const full = join(p, name);
-      if (statSync(full).isDirectory()) walk(full);
-      else if (name.endsWith('.md')) out.push(full);
-    }
+  for (const skill of readdirSync(join(ROOT, 'assets'))) {
+    const dir = join(ROOT, 'assets', skill);
+    if (!statSync(dir).isDirectory()) continue;
+    (function walk(p) {
+      for (const name of readdirSync(p)) {
+        const full = join(p, name);
+        if (statSync(full).isDirectory()) walk(full);
+        else if (name.endsWith('.md')) out.push(full);
+      }
+    })(dir);
   }
-  walk(dir);
   return out;
 }
 
