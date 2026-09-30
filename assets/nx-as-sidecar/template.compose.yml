@@ -1,0 +1,23 @@
+# nx-as 边车容器 compose 模板（配套 template.Dockerfile）
+#
+# 用法：cp template.compose.yml docker-compose.yml && docker compose up -d
+# 默认参数已按最小安全配置写好；注释里是可调项。
+
+services:
+  myapp-nxas:
+    build: .                          # 用 template.Dockerfile 构建；已有镜像改成 image: myapp-nxas:0.1.0
+    container_name: myapp-nxas
+    ports:
+      - "8080:8080"                   # 唯一公网入口（NXAS_LISTEN_PORT）。47 服务器上被占则换宿主侧，如 "18080:8080"
+    volumes:
+      - ./data:/data                  # 【必须】store.json（设备/密钥/审计）与 pi-agent 目录；不挂 = 重建容器全部 token 作废
+    environment:
+      NX_AS_STORE: /data/store.json
+      # NX_AS_TOKEN: 管理密钥      # 留空则首启自动生成（docker logs 查看）；建议显式固定
+      # NXAS_LISTEN_PORT: 8080     # 容器内监听端口，一般不动
+      # NXAS_BOOTSTRAP: 0          # 0=登录时不代签上游会话 cookie（非 pi-web 主进程建议关）
+    restart: unless-stopped
+    mem_limit: 700m                  # 按应用调；pi-web 建议 700m 起
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }

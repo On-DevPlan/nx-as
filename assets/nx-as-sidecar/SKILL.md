@@ -26,7 +26,25 @@ description: 当用户要"给自己的应用套上鉴权网关容器"或提到 n
 4. **锁版本 FROM** —— `FROM ghcr.io/on-devplan/nx-as-base:0.7.1`，不用 latest
    （entrypoint/模板行为会漂移——47 服务器踩过：旧 entrypoint 渲不了新模板 → 重启循环）。
 
-## 最小可用 Dockerfile
+## 快速上手：直接用模板（含 pi-web 案例）
+
+skill 目录里有两个**开箱即用**的模板，以 pi-web 为主进程案例（换自己的应用只改标注的 STEP 1/2）：
+
+| 文件 | 用法 |
+|---|---|
+| `template.Dockerfile` | `cp template.Dockerfile Dockerfile` —— 含全部默认参数注释、pi-web 安装（含 @agegr 软链坑）、换自用应用的替代段 |
+| `template.compose.yml` | `cp template.compose.yml docker-compose.yml` —— 端口/卷/内存/日志轮转默认值齐备 |
+
+```bash
+cp template.Dockerfile Dockerfile && cp template.compose.yml docker-compose.yml
+docker compose up -d
+# 验证三件套：
+curl -s http://localhost:8080/_nxas/api/auth/verify   # → {"valid":false,"version":"..."}
+curl -s -o /dev/null -w '%{http_code}\n' -H 'Accept: text/html' http://localhost:8080/   # → 302
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8080/_nxas/m/v1/sessions       # → 401
+```
+
+## 最小可用 Dockerfile（模板的精简版，理解用）
 
 ```dockerfile
 FROM ghcr.io/on-devplan/nx-as-base:0.7.1
