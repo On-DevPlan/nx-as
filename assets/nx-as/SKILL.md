@@ -1,6 +1,6 @@
 ---
 name: nx-as
-description: 当用户要"把 nx-as 作为鉴权网关跑 pi-web/管理设备 token/配置 Bearer 代理"，或提到 nx-as、npx-ai-server、nx-apiserver、个人 agent 网关、pi-web 代理、device token 时使用。nx-as 是 pi-web 云端个人 agent 的鉴权代理网关（nx-apiserver 语义）：CLI 与管理 API 同源。不适用于：与 nx-as 无关的通用编程问题、Claude Code 自身配置。
+description: 当用户要"把 nx-as 作为鉴权网关跑 pi-web/管理设备 token/配置 Bearer 代理/给自有应用套鉴权容器"，或提到 nx-as、npx-ai-server、nx-apiserver、个人 agent 网关、pi-web 代理、device token、nx-as Docker 镜像、边车容器、FROM nx-as-base 时使用。nx-as 是 pi-web 云端个人 agent 的鉴权代理网关（nx-apiserver 语义）：CLI 与管理 API 同源。不适用于：与 nx-as 无关的通用编程问题、Claude Code 自身配置。
 ---
 
 # nx-as — pi-web 鉴权代理网关（nx-apiserver）
@@ -41,6 +41,7 @@ CLI 与管理 API 同源（一条 action 两端暴露）。
 |---|---|
 | 手机/设备接入：token 签发、`/m/v1/*` API、SSE 短票 | [references/01-gateway.md](01-gateway.md) |
 | Bearer 代理、装 pi 扩展/技能、权限扩展 | [references/03-extensions.md](03-extensions.md) |
+| **Docker 边车容器：`FROM nx-as-base` 给自有应用套鉴权网关** | [references/04-docker-sidecar.md](04-docker-sidecar.md) |
 | 改代码、加功能域、理解分层 | [references/00-design.md](00-design.md) |
 
 ## 什么时候不用
