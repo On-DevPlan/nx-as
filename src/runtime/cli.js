@@ -131,21 +131,57 @@ const BUILTINS = [
   {
     id: 'skill.install',
     cli: ['skill', 'install'],
-    summary: '把内置 skill 装到 ~/.claude/skills（三态：装/跳过/冲突）',
+    summary: '把内置 skill 装到 ~/.claude/skills（无参=默认；--group <g> 一键装一组；三态：装/跳过/冲突）',
     args: [{ name: 'name', required: false }],
-    flags: { to: { type: 'string' }, force: { type: 'boolean' } },
+    flags: { to: { type: 'string' }, force: { type: 'boolean' }, group: { type: 'string' } },
     run: async (ctx) => {
-      const { installBundledSkill } = await import('./skill.js');
-      return installBundledSkill(ctx);
+      const skill = await import('./skill.js');
+      // --group 与位置参数互斥（二者等价语义，报错比猜意图友好）
+      if (ctx.group && ctx.name) {
+        const err = new Error('--group 与 [name] 只能给一个');
+        err.code = CODES.INVALID_INPUT;
+        throw err;
+      }
+      if (ctx.group) return skill.installGroup({ name: ctx.group, to: ctx.to, force: ctx.force });
+      return skill.installBundledSkill({ name: ctx.name, to: ctx.to, force: ctx.force });
     },
-    render: (r) =>
-      r.status === 'conflict'
+    render: (r) => {
+      if (r.group) {
+        // 多 skill 聚合结果（显式 group 字段判别，不做形状嗅探）
+        const head = r.status === 'conflict'
+          ? `冲突: group ${r.group}（${r.count} 个文件不同；确认覆盖加 --force）`
+          : `已装 group ${r.group}（${r.skills.length} 个 skill，${r.files} 个文件${r.replaced ? '，含替换' : ''}）`;
+        const lines = r.skills.map((s) => `  ${s.skill}: ${s.status === 'conflict' ? '冲突' : s.skipped ? '跳过' : s.replaced ? '替换' : '安装'} ${s.path}`);
+        return [head, ...lines].join('\n');
+      }
+      return r.status === 'conflict'
         ? `冲突: ${r.path}（${r.count} 个文件不同；确认覆盖加 --force）`
         : r.skipped
           ? `已是最新: ${r.path}`
           : r.replaced
             ? `已替换: ${r.path}`
-            : `已安装: ${r.path}`,
+            : `已安装: ${r.path}`;
+    },
+  },
+  {
+    id: 'skill.list',
+    cli: ['skill', 'list'],
+    summary: '列出可装的 skill 与 group（标出默认 install；source=manifest|assets-dirs）',
+    flags: { to: { type: 'string' } },
+    run: async () => {
+      const { listBundledSkills } = await import('./skill.js');
+      return listBundledSkills();
+    },
+    render: (r) => {
+      const lines = ['可装的 skill:'];
+      for (const s of r.skills) {
+        lines.push(`  * ${s}${s === r.defaultSkill ? '   （默认 install）' : ''}`);
+      }
+      lines.push('可装的 group:');
+      for (const g of r.groups) lines.push(`  * ${g}`);
+      lines.push(`来源: ${r.source}`);
+      return lines.join('\n');
+    },
   },
   {
     id: 'skill.get',

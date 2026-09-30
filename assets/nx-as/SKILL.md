@@ -30,7 +30,9 @@ CLI 与管理 API 同源（一条 action 两端暴露）。
 | `nx-as device list` / `device revoke <id>` | 设备清单 / 吊销（立即 401） |
 | `nx-as auth status` / `auth rotate` | 管理密钥状态（掩码）/ 轮换 |
 | `nx-as health` / `bootstrap --json` / `routes [--http "METHOD /path"]` | 排查 / 上下文 / 命令-路由对照 |
-| `nx-as skill install [name] [--to DIR] [--force]` | 装 skill 到 ~/.claude/skills |
+| `nx-as skill install [name] [--to DIR] [--force]` | 装 skill 到 ~/.claude/skills（无参=默认 nx-as） |
+| `nx-as skill install --group <g>` | 一键装一组（sidecar=边车容器指南；清单 assets/groups.json） |
+| `nx-as skill list` | 可装 skill/group 清单（标默认；source=manifest\|assets-dirs） |
 | `nx-as skill get [name] [ref] [--json]` | 导出 skill 上下文（外部 agent 自助获取） |
 
 模型/插件/技能/prompt 的管理都在 **pi-web 自带设置页**（或直接编辑 `~/.nx-as/pi-agent/` 下文件）——nx-as 只管鉴权与转发。

@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "$comment": "group 名 → skill 名列表的别名表。路径恒由 assets/<skills[i]>/ 推导——本文件只做聚合，不是第二条事实源。默认 group key = package.json.name（nx-as）：skill install（无参数）装它。",
+  "groups": {
+    "nx-as": {
+      "skills": ["nx-as"],
+      "summary": "主 skill：pi-web 鉴权网关的设备接入/管理面（默认 install）"
+    },
+    "sidecar": {
+      "skills": ["nx-as-sidecar"],
+      "summary": "基于 nx-as-base 的边车容器接入指南（自有应用套鉴权网关）"
+    }
+  }
+}
