@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: write   # 写 tag 需要
+  actions: write    # gh workflow run 触发镜像构建需要（否则 403 Resource not accessible by integration）
 
 jobs:
   publish:
@@ -61,6 +62,7 @@ jobs:
       # deploy 保持 false：需要 47 部署时手动跑 docker-image（或给 deploy job 用 PAT 直连触发）。
       - name: 触发镜像构建（tag 事件不会自动触发 workflow）
         if: steps.check.outputs.tag_exists == 'false'
+        continue-on-error: true          # 镜像 dispatch 失败不阻断 npm 发布（可事后手动 gh workflow run）
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh workflow run "Docker image" --ref "${{ steps.pkg.outputs.tag }}"
