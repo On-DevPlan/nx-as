@@ -9,6 +9,18 @@ export const THROTTLE_MAX_DELAY_MS = 60_000;
 const THROTTLE_RESET_AFTER_MS = 5 * 60_000;
 
 const state = new Map(); // key -> { failures, lastFailureAt, blockedUntil }
+const THROTTLE_MAX_ENTRIES = 10_000;
+
+// 超过上限时只淘汰最旧条目（Map 按插入序），不整表 clear——
+// 整表清空会瞬间解封所有键（含正常用户），制造全局短窗口。
+function evictIfOverflowing() {
+  let excess = state.size - THROTTLE_MAX_ENTRIES;
+  if (excess <= 0) return;
+  for (const k of state.keys()) {
+    state.delete(k);
+    if (--excess <= 0) break;
+  }
+}
 
 function entry(key) {
   let s = state.get(key);
@@ -48,7 +60,7 @@ export function recordFailure(key, now = Date.now()) {
   s.lastFailureAt = now;
   const delay = backoffDelayMs(s.failures);
   s.blockedUntil = now + delay;
-  if (state.size > 10_000) state.clear(); // 兜底：IP 造假洪泛时整体重置
+  evictIfOverflowing(); // 兜底：IP 造假洪泛时淘汰最旧条目
   return delay;
 }
 

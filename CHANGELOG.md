@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.7.2 (2026-10-08)
+
+**安全 review 后的一致性与加固修复**：未发现可直接利用的高危漏洞；修复 6 项「注释/死代码与实际行为不一致」及纵深防御点。
+
+### Fixed
+
+- **统一短票通道机机 Basic 口径**：nginx 模板对 `/m/v1/` 注入 Basic 是正确行为（每个请求先过
+  `auth_request`，裸请求在到达 `proxy_pass` 前即 401），但原注释声称「短票不注入 Basic、否则放行裸请求」，
+  与 direct 模式及实际行为矛盾、易误导。已更正两处注释，行为不变。
+- **删除 `proxyToUpstream` 死分支**：`withMachineAuth=false` 分支无任何调用方且注释与默认行为相反，已移除。
+- **启动 pi-web 显式绑定 loopback**：launcher 增加 `--hostname 127.0.0.1`，不再仅依赖 pi-web 默认值
+  （防止上游默认改为非 loopback 时静默暴露）。
+- **限流洪泛不再整表解封**：`state` 超 10000 条时改为按插入序淘汰最旧条目（LRU），而非 `clear()`
+  造成的短暂全局解封窗口。
+- **store 缓存身份纳入路径**：多 store 路径切换时不再因仅按 mtime 缓存而串数据。
+- **入拼 nginx 配置字段加白名单**：`domain`/`certPath`/`keyPath` 与 `NXAS_TARGET_AUTH_HEADER`
+  校验字符集，拒绝引号/分号/换行等可破坏或注入配置的值。
+
+### Added
+
+- 回归测试：nginx 入拼白名单、限流洪泛 LRU 淘汰、store 路径缓存隔离（全套 49 项全绿）。
+
 ## 0.7.1 (2026-09-29)
 
 **基础镜像双形态 + GHCR 分发**：同一个 Dockerfile 出两个 target——`base`（纯权限壳）与 `full`（base + pi-web），CI 同时构建并推送到 GHCR。

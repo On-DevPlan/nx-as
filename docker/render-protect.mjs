@@ -17,6 +17,15 @@ const patterns = protect.split(/\s+/).filter(Boolean);
 
 const PROTECT_ALL = patterns.includes('/*') || patterns.includes('/');
 
+// authHeader 会被直接拼进 nginx 配置：只允许 "Basic/Bearer <token>" 形态，
+// 拒绝引号/分号/花括号/换行/$ 等可破坏或注入配置的字符。
+if (authHeader && authHeader !== 'none') {
+  if (!/^(?:Basic|Bearer)\s+[A-Za-z0-9+/_=-]+$/.test(authHeader)) {
+    console.error('[render-protect] NXAS_TARGET_AUTH_HEADER 非法（仅允许 "Basic/Bearer <token>"，不得含引号/分号/换行）');
+    process.exit(1);
+  }
+}
+
 function body(indent) {
   const i = ' '.repeat(indent);
   const lines = [

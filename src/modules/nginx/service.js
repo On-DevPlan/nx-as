@@ -32,12 +32,23 @@ export function renderTemplate(cfg, { machineSecret: secret, gatewayPort = 7801,
   if (!cfg.domain) throw badInput('缺少 domain（公网域名）');
   if (!secret) throw badInput('机机密码未生成（先 rotate-machine-secret 或 serve 一次）');
 
+  // 入拼 nginx 配置的字段做字符白名单校验，防止含引号/分号/换行的值破坏或注入配置
+  if (!/^[A-Za-z0-9.*_-]+$/.test(cfg.domain)) {
+    throw badInput('domain 含非法字符（仅允许字母、数字、点、连字符、*、下划线）');
+  }
+  const safePath = (p, label) => {
+    if (!/^[A-Za-z0-9/._-]+$/.test(p) || !p.startsWith('/')) {
+      throw badInput(`${label} 含非法字符（须为以 / 开头的绝对路径）`);
+    }
+  };
+
   // TLS 可选：两个都给才 emit ssl_ 指令；半配报 INVALID_INPUT；都不给 = 默认 HTTP
   const hasCert = !!(cfg.certPath || cfg.keyPath);
   if (hasCert && !(cfg.certPath && cfg.keyPath)) {
     throw badInput('certPath/keyPath 必须同时设置或同时留空');
   }
   const useTls = !!(cfg.certPath && cfg.keyPath);
+  if (useTls) { safePath(cfg.certPath, 'certPath'); safePath(cfg.keyPath, 'keyPath'); }
   const listenBlock = useTls
     ? 'listen 443 ssl;\n    http2 on;'
     : 'listen 80;';
@@ -63,8 +74,9 @@ server {
     location /m/v1/ {
         auth_request /_nxas_auth;
         auth_request_set $nxas_device $upstream_http_x_device_id;
-        # 短票通道不带机机凭据（票即授权）：nx-as 在 X-Auth-Cred: ticket 时就要求
-        # 不要注入 Basic。缺了这句会退化成「票被换成 Basic」，等于放行裸请求
+        # 每个请求先过 auth_request：无有效 token/短票/会话即 401，到不了下面的 proxy_pass。
+        # Basic 是 nx-as↔pi-web 的内部机机信任，仅在鉴权通过后注入上游（与 direct 模式一致）、
+        # 不回传客户端；因此注入 Basic 不会放行裸请求——裸请求已被 auth_request 拦下。
         auth_request_set $nxas_cred $upstream_http_x_auth_cred;
         proxy_pass http://127.0.0.1:${upstreamPort}/api/;
         proxy_set_header Authorization "Basic ${secret}";

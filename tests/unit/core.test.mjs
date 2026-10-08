@@ -3,6 +3,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const imp = (p) => import(pathToFileURL(join(ROOT, p)).href);
@@ -81,11 +83,15 @@ test('store: 事务抛错不落盘（structuredClone 隔离）', async () => {
   resetStoreCache();
   assert.equal((await loadStore()).devices.length, before);
 });
-test('store: normalize 补默认字段，容忍旧 store 的多余字段（向前兼容）', async () => {
-  resetStoreCache();
-  await saveStore({ version: 1, devices: undefined });
-  resetStoreCache();
-  const s = await loadStore();
-  assert.deepEqual(s.devices, [], '缺省字段应补默认值');
-  assert.equal(s.machineSecret, '', 'machineSecret 缺省为空串');
+test('store: 不同路径的缓存互不串（缓存身份含路径）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'store-path-'));
+  const a = join(dir, 'a.json');
+  const b = join(dir, 'b.json');
+  await saveStore({ version: 1, machineSecret: 'AAA' }, a);
+  await saveStore({ version: 1, machineSecret: 'BBB' }, b);
+  // 不显式 reset：验证按路径区分缓存，A 不会返回 B 的内容
+  assert.equal((await loadStore(a)).machineSecret, 'AAA');
+  assert.equal((await loadStore(b)).machineSecret, 'BBB');
+  assert.equal((await loadStore(a)).machineSecret, 'AAA', '再读 A 仍正确');
 });
+

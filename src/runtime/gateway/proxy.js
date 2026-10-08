@@ -136,19 +136,14 @@ async function _handleGateway(req, res, url) {
 
 // ---------- 反代（流式管道） ----------
 
-function proxyToUpstream(req, res, upstreamPath, { withMachineAuth = true } = {}) {
+function proxyToUpstream(req, res, upstreamPath) {
   const { host, port } = upstreamUrl();
   const headers = { ...req.headers };
   headers.host = `${host}:${port}`;
   delete headers['x-auth-cred']; // nx-as 内部头，不外传
-  if (withMachineAuth) {
-    headers.authorization = machineAuthHeader();
-  } else {
-    // 短票通道：清掉客户端的 Authorization，也**绝不**注入机机 Basic。
-    // 否则任何人裸请求 /m/v1/agent/:id/events 都能拿到 pi-web 会话内容，
-    // 网关鉴权形同虚设。短票已由 nx-as 消费，pi-web 侧凭据为 null 很正常。
-    delete headers.authorization;
-  }
+  // 鉴权已在 decide() 通过：注入 nx-as↔pi-web 内部机机信任（只进上游头、不回传客户端），
+  // 覆盖掉客户端自带的 Authorization。裸请求在 decide() 即被 401，到不了这里。
+  headers.authorization = machineAuthHeader();
   delete headers['content-length']; // 管道转发时由 node 重算
   if (headers['x-forwarded-for']) headers['x-forwarded-for'] += `, ${req.socket.remoteAddress}`;
   else headers['x-forwarded-for'] = req.socket.remoteAddress || '';

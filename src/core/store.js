@@ -42,20 +42,23 @@ function normalize(data) {
 
 let cache = null;
 let cacheMtime = -1;
+let cachePath = '';
 
 export async function loadStore(explicitPath) {
   const p = explicitPath || storePathFromEnv();
   try {
     const st = await fsp.stat(p);
-    if (cache && cacheMtime === st.mtimeMs) return cache;
+    if (cache && cachePath === p && cacheMtime === st.mtimeMs) return cache;
     const raw = await fsp.readFile(p, 'utf8');
     cache = normalize(JSON.parse(raw));
     cacheMtime = st.mtimeMs;
+    cachePath = p;
     return cache;
   } catch {
     // 文件不存在或损坏：返回空结构（首次运行；也允许外部修好后自动恢复）
     cache = normalize(null);
     cacheMtime = -1;
+    cachePath = '';
     return cache;
   }
 }
@@ -68,6 +71,7 @@ export async function saveStore(next, explicitPath) {
   await fsp.writeFile(tmp, JSON.stringify(data, null, 2), 'utf8');
   await fsp.rename(tmp, p); // rename 在同一文件系统上是原子的
   cache = data;
+  cachePath = p;
   cacheMtime = (await fsp.stat(p)).mtimeMs; // 自己写入后主动刷新 mtime，避免「自己触发自己重读」
   return data;
 }
@@ -84,4 +88,5 @@ export async function mutateStore(fn, explicitPath) {
 export function resetStoreCache() {
   cache = null;
   cacheMtime = -1;
+  cachePath = '';
 }

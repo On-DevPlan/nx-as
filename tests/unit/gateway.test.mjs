@@ -139,3 +139,14 @@ test('节流: 不同键互不影响', () => {
   assert.ok(retryAfterMs('tok:dev1', 1000) > 0);
   assert.equal(retryAfterMs('tok:dev2', 1000), 0, '别的设备不连坐');
 });
+
+test('节流: 洪泛超上限只淘汰最旧条目，不整表解封（近期键仍封锁）', () => {
+  resetThrottle();
+  const N = 10_002; // 超过 THROTTLE_MAX_ENTRIES(10000)
+  for (let i = 0; i < N; i++) recordFailure(`ip:flood${i}`, 1000 + i);
+  // 最旧条目被淘汰（重新查询得到空条目 → 0）
+  assert.equal(retryAfterMs('ip:flood0', 1000), 0, '最旧键已淘汰');
+  // 近期条目仍在封锁（没有被整表 clear）
+  assert.ok(retryAfterMs(`ip:flood${N - 1}`, 1000) > 0, '最近键仍封锁，未全局解封');
+});
+

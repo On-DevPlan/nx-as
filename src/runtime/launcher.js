@@ -40,7 +40,12 @@ export async function spawnWeb({ port = 30141, open = false } = {}) {
   const piWebPassword = await resolvePiWebPassword();
   const { loadStore: ls } = await import('../core/store.js');
   const persisted = Boolean((await ls()).machineSecret);
-  const child = spawn(process.execPath, [binPath, '--no-open', '--port', String(port)], {
+  const child = spawn(process.execPath, [
+    binPath, '--no-open',
+    // 显式绑定 loopback（不依赖 pi-web 默认值 / PI_WEB_HOSTNAME）——公网流量物理上只能经网关
+    '--hostname', '127.0.0.1',
+    '--port', String(port),
+  ], {
     stdio: 'inherit',
     env: {
       ...process.env,

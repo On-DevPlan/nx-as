@@ -57,6 +57,12 @@ test('renderTemplate: 有证书 → emit ssl_* 指令与 listen 443 ssl', () => 
   assert.ok(t.includes('ssl_certificate_key /k.pem;'), 'ssl_certificate_key 路径');
 });
 
+test('renderTemplate: domain/证书路径含非法字符 → 报 INVALID_INPUT（防配置注入）', () => {
+  assert.throws(() => svc.renderTemplate({ ...CFG, domain: 'evil.com;.bad' }, { machineSecret: 'S' }), (e) => e.code === 'INVALID_INPUT');
+  assert.throws(() => svc.renderTemplate({ ...CFG, certPath: '/c.pem', keyPath: '/k".pem' }, { machineSecret: 'S' }), (e) => e.code === 'INVALID_INPUT');
+  assert.throws(() => svc.renderTemplate({ ...CFG, certPath: 'relative/c.pem', keyPath: 'relative/k.pem' }, { machineSecret: 'S' }), (e) => e.code === 'INVALID_INPUT');
+});
+
 // ---------- apply 备份/回滚（mock sudo nginx 执行层，平台无关） ----------
 
 test('nginxApply: 写托管文件 + nginx -t 失败自动回滚 + 成功 reload', async () => {
