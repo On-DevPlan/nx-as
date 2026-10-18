@@ -99,11 +99,11 @@ jobs:
         run: |
           {
             echo "### GHCR 镜像"
-            echo "- \`${{ steps.img.outputs.name }}:${{ steps.meta.outputs.version }}\`（gost + nginx + nx-as，安全内网穿透鉴权基座）"
-            echo "- \`${{ steps.img.outputs.name }}:latest\`（自动指向最新版本）"
+            echo "- [${{ steps.img.outputs.name }}:${{ steps.meta.outputs.version }}]（gost + nginx + nx-as，安全内网穿透鉴权基座）"
+            echo "- [${{ steps.img.outputs.name }}:latest]（自动指向最新版本）"
             echo ""
             echo "**部署到 47**（手动）："
             echo '```bash'
-            echo "ssh 47 'cd /opt/gost-as && docker compose pull && docker compose up -d'"
-            echo "```"
+            echo 'ssh 47 "cd /opt/gost-as && docker compose pull && docker compose up -d"'
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
