@@ -10,8 +10,10 @@ import { appendAudit } from '../../core/audit.js';
 import { constants as FS_CONSTANTS } from 'node:fs';
 
 const NGINX_BIN = process.env.NXAS_NGINX_BIN || 'nginx';
-// 容器内以 root 直跑 nginx，无需 sudo（NXAS_NGINX_SUDO=0）；宿主机默认走 sudo -n 白名单
-const SUDO = process.env.NXAS_NGINX_SUDO === '0' ? [] : ['sudo', '-n'];
+// 容器内以 root 直跑 nginx，无需 sudo（NXAS_NGINX_SUDO=0）；宿主机默认走 sudo -n 白名单；
+// 非 Linux（Windows/macOS 开发态，NXAS_TEST_ALLOW_NON_LINUX 放行的文件层路径）跳过 sudo——
+// Windows 自带 sudo 会把 -n 当自己的参数直接报错
+const SUDO = (process.env.NXAS_NGINX_SUDO === '0' || process.platform !== 'linux') ? [] : ['sudo', '-n'];
 const DEFAULT_MANAGED = '/etc/nginx/conf.d/nx-as-managed.conf';
 const NGINX_PORT_DEFAULT = 30141;
 
@@ -119,14 +121,24 @@ server {
 
 let execFileImpl = null;
 async function run(cmd, ...rest) {
-  // 支持 run(NGINX_BIN, ['-t']) 与 run(...SUDO, [NGINX_BIN, '-t']) 两种形态：
-  // rest 末尾必须是数组（真正的 args），前面的字符串是 sudo 前缀
-  const args = [...rest.filter((x) => typeof x === 'string'), ...rest.find((x) => Array.isArray(x)) || []];
+  // 归一两种调用形态（避免调用方因 SUDO 前缀有无而出错）：
+  //   run(bin, ...args)                —— nginxExec 的容器/无 sudo 形态
+  //   run(...sudoPrefix, [bin, ...args]) —— 宿主机 sudo 形态
+  let bin = cmd;
+  let args;
+  if (Array.isArray(cmd)) {
+    args = cmd.slice(1);
+    bin = cmd[0];
+  } else {
+    const arr = rest.find((x) => Array.isArray(x));
+    const prefix = rest.filter((x) => typeof x === 'string');
+    args = arr ? [...prefix, ...arr] : prefix;
+  }
   if (!execFileImpl) {
     execFileImpl = (await import('node:child_process')).execFile;
   }
   return new Promise((resolve, reject) => {
-    execFileImpl(cmd, args, { timeout: 10_000 }, (err, stdout, stderr) => {
+    execFileImpl(bin, args, { timeout: 10_000 }, (err, stdout, stderr) => {
       if (err) {
         err.stdout = String(stdout || '');
         err.stderr = String(stderr || '');

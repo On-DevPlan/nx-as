@@ -25,12 +25,13 @@ export function Btn({ children, onClick, disabled, className = '' }) {
   );
 }
 
-export function Input({ value, onChange, placeholder, disabled }) {
+export function Input({ value, onChange, placeholder, disabled, style }) {
   return (
     <input
       value={value ?? ''}
       placeholder={placeholder}
       disabled={disabled}
+      style={style}
       onChange={(e) => onChange?.(e.target.value)}
     />
   );

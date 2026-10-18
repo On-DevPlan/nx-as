@@ -38,6 +38,10 @@ CLI 与管理 API 同源（一条 action 两端暴露）。
 | `nx-as auth status` / `auth rotate` | 管理密钥状态（掩码）/ 轮换 |
 | `nx-as health` / `bootstrap --json` / `routes [--http "METHOD /path"]` | 排查 / 上下文 / 命令-路由对照 |
 | `nx-as audit [--limit 200]` | 审计日志（只读，新→旧；登录/网关/nginx 变更全落审计） |
+| `nx-as client serve [--port 7890]` | **本地 client 管理面**（127.0.0.1，连接 server / 注册穿透 / 对账清单；仅协调 gost，不代劳 server 面板） |
+| `nx-as client config set --server <api> --token <tok> --relay <url>` | client 连接配置（`~/.nx-as/client.json`） |
+| `nx-as client register <名> <本地端口> [--public-port P]` / `unregister <名>` | 一键注册/注销穿透（server conf + 本地 gost -L 同时生效） |
+| `nx-as client list` / `remote-list` / `start` / `stop` / `doctor` | 本地清单（gost 进程）/ server 侧对账 / gost 启停 / 自检 |
 | `nx-as skill install [name] [--to DIR] [--force]` | 装 skill 到 ~/.claude/skills（无参=默认 nx-as） |
 | `nx-as skill install --group <g>` | 一键装一组（sidecar=边车容器指南；清单 assets/groups.json） |
 | `nx-as skill list` | 可装 skill/group 清单（标默认；source=manifest\|assets-dirs） |

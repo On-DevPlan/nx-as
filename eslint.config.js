@@ -57,9 +57,9 @@ export default defineConfig([
   // 聚合模块是刻意的例外（它要读各模块状态）
   { files: ['src/modules/system/**/*.js'], rules: { 'no-restricted-imports': 'off' } },
 
-  // 前后端边界——价值最高的一条。files 必须同时覆盖 view.jsx
+  // 前后端边界——价值最高的一条。files 必须同时覆盖 view.jsx 与 client 面板
   {
-    files: ['src/web/frontend/**/*.{js,jsx}', 'src/modules/**/view.jsx'],
+    files: ['src/web/frontend/**/*.{js,jsx}', 'src/web/client/**/*.{js,jsx}', 'src/modules/**/view.jsx'],
     rules: {
       'no-restricted-imports': ['error', { patterns: [
         { group: ['node:*'], message: '前端不能引用 Node 内置模块。' },

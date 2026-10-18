@@ -1,8 +1,45 @@
 # Changelog
 
-## 0.8.0 (2026-10-18)
+## 0.9.0 (2026-10-18)
 
-**定位收敛：nginx 配置文件管理器为一等公民**——多文件配置管理 + 面板专业化 + 鉴权加固 + 目录结构整理。
+**本地 client + 面板运营深化**——穿透注册收进本地工具，审计/设备管理页齐备，保存前 diff 与漂移横幅。
+
+### Added
+
+- **nx-as client（本地穿透注册管理面）**：`nx-as client <子命令>` 系列 + `nx-as client serve`
+  本地 web（127.0.0.1:7890，loopback only、无密钥门、按需启动用完即走）。CLI 与
+  `/api/client/*` 同一张 action 表。功能边界：**只协调 gost 穿透注册**——
+  连接配置（server/token/relay，存 `~/.nx-as/client.json`）、一键注册/注销（server 先行
+  写 conf 成功才动本地，防两侧不一致；单 gost 进程聚合全部 -L，client 退出 gost 随之消亡）、
+  本地/server 双侧清单对账。不代理 server 面板（nginx 管理/设备/审计都在 server 侧）。
+  面板为 vite 双 entry 的第二个产物（`public/client/`）。
+- **CI：gost-as 镜像自动发布**：新增 `.github/workflows/gost-as-image.yml`，在 `v*` tag 或
+  manual dispatch 时自动构建 Dockerfile `gost` target 并推送 `ghcr.io/on-devplan/gost-as:<ver>`
+  + `:latest`，含三进程冒烟（nginx 入口 / gost relay / nx-as 网关契约）。
+- **审计日志页（system tab）**：表格列时间 / 动作（徽章） / 详情（JSON 单行截断，点击行展开全文）；
+  按动作下拉（distinct action 枚举）与文本包含（动作/详情）双过滤；只读、limit 200
+  默认（上限 1000）。后端新增 `GET /api/audit` / `nx-as audit`，复用 `core/audit.js` 的 JSONL 存储。
+- **设备/会话管理页升级**：设备清单表格化（名称+id、scope 徽章 admin/client、active/revoked、
+  最近使用时间与 IP/UA）；新增 [全部吊销]（应急，所有 token 与已发会话立即失效）。
+  `device issue` 支持 `--scope admin|client`（缺省 admin 向后兼容）；`verifyDeviceToken`
+  在校验路径上记录最近使用 IP/UA（60s 节流写）。
+- **面板漂移横幅（nginx-ui 同款）**：`nginxStatus().drifted` 三态各有着落——`true` 黄条
+  「磁盘配置与模板不一致（可能被手改）」附 [查看差异]（复用 diff 组件）与 [覆盖]（空 patch
+  apply，以已保存配置的模板覆盖磁盘）；`missing` 提示未生成并给 [生成并应用]；`unreadable`
+  红条提示权限异常。`nginxStatus` 的漂移/目录写权探测改为平台无关（Windows 开发态同样可见）。
+- **托管配置保存前 diff 预览**：面板「托管单文件」卡将磁盘现网配置与最新渲染结果做行级红绿
+  diff（自研 LCS，零第三方依赖，`frontend/lib/diff.js` 可复用）；无差异时 Apply 置灰，
+  表单再改动自动恢复可用；Apply 前复核一次避免空 apply。
+
+### Fixed
+
+- **吊销即失效已发会话（安全修复）**：会话 cookie 是无状态 HMAC，旧实现吊销设备后已发
+  会话仍然有效至过期；`decide()` 现在回查设备存活（`isDeviceAlive`），吊销即刻锁死全部会话。
+- **非 Linux 平台不再拼 sudo 前缀 + `run()` 参数归一**：Windows 自带 sudo 会把 `-n` 当
+  自己的参数；`SUDO=[]` 时老式 `run(...SUDO, [bin, ...args])` 调用会把数组落到 cmd 位
+  （单测抓出 reload 丢失）。`run()` 现在归一两种形态。
+- **`?preview=1` 布尔强转**：`applySpec` 布尔只认 `true`，`'1'` 静默变 false 导致 HTTP
+  预览参数失效；视图改用 `?preview=true`。
 
 ### Changed
 
@@ -11,32 +48,12 @@
   折叠到「管理所有配置」「管理模板」「高级」三个弹窗（通用 Modal 组件：遮罩+居中+Esc+背景关闭）。
   state 保留在父组件，弹窗开关不丢选择/编辑/备份。
 
+## 0.8.0 (2026-10-18)
+
+**定位收敛：nginx 配置文件管理器为一等公民**——多文件配置管理 + 面板专业化 + 鉴权加固 + 目录结构整理。
+
 ### Added
 
-- **CI：gost-as 镜像自动发布**：新增 `.github/workflows/gost-as-image.yml`，在 `v*` tag 或
-  manual dispatch 时自动构建 Dockerfile `gost` target 并推送 `ghcr.io/on-devplan/gost-as:0.8.0`
-  + `:latest`，含三进程冒烟（nginx 入口 / gost relay / nx-as 网关契约）。`npm-publish.yml`
-  在打 tag 时不会自动 dispatch 它（v* tag push 事件本身触发）；手动触发用
-  `gh workflow run "gost-as image"`。
-- **审计日志页（system tab）**：表格列时间 / 动作（徽章） / 详情（JSON 单行截断，点击行展开全文）；
-  按动作下拉（从已拉取列表枚举 distinct action）与文本包含（动作/详情）双过滤；只读、limit 200
-  默认（上限 1000）。后端新增 `GET /api/audit` / `nx-as audit`，复用 `core/audit.js` 的 JSONL 存储。
-  按动作下拉（从已拉取列表枚举 distinct action）与文本包含（动作/详情）双过滤；只读、limit 200
-  默认（上限 1000）。后端新增 `GET /api/audit` / `nx-as audit`，复用 `core/audit.js` 的 JSONL 存储。
-- **设备/会话管理页升级**：设备清单表格化（名称+id、scope 徽章 admin/client、active/revoked、
-  最近使用时间与 IP/UA）；新增 [全部吊销]（应急，所有 token 与已发会话立即失效）。
-  `device issue` 支持 `--scope admin|client`（缺省 admin 向后兼容）；`verifyDeviceToken`
-  在校验路径上记录最近使用 IP/UA（60s 节流写）。
-- **吊销即失效已发会话（安全修复）**：会话 cookie 是无状态 HMAC，旧实现吊销设备后已发
-  会话仍然有效至过期；`decide()` 现在回查设备存活（`isDeviceAlive`），吊销即刻锁死全部会话。
-- **面板漂移横幅（nginx-ui 同款）**：`nginxStatus().drifted` 三态各有着落——`true` 黄条
-  「磁盘配置与模板不一致（可能被手改）」附 [查看差异]（复用 diff 组件）与 [覆盖]（空 patch
-  apply，以已保存配置的模板覆盖磁盘）；`missing` 提示未生成并给 [生成并应用]；`unreadable`
-  红条提示权限异常。`nginxStatus` 的漂移/目录写权探测改为平台无关（Windows 开发态同样可见）。
-- **托管配置保存前 diff 预览**：面板「托管单文件」卡将磁盘现网配置与最新渲染结果做行级红绿
-  diff（自研 LCS，零第三方依赖，`frontend/lib/diff.js` 可复用）；无差异时 Apply 置灰，
-  表单再改动自动恢复可用；Apply 前复核一次避免空 apply。顺带修复 `?preview=1` 布尔强转
-  （`applySpec` 只认 `true`）导致 HTTP 预览参数静默失效的问题。
 - **nginx 多文件配置管理器**（宿主机模式）：托管目录（managedPath 所在目录，默认 conf.d）内
   `*.conf` 的浏览 / 编辑 / 新建 / 停用（`.conf` ↔ `.conf.disabled` 改名语义）/ 删除 / 备份还原。
   固定管线：变更前自动备份（`~/.nx-as/nginx-backups/`，每文件滚动 10 份，同秒变更加序号不覆盖）

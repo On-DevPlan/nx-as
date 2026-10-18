@@ -19,6 +19,15 @@ export default defineConfig({
     outDir: '../../../public',
     // outDir 在 root 之外时 vite 默认不清空，必须显式开启（否则旧 hashed 资源残留）
     emptyOutDir: true,
+    // 双 entry（input 相对 cwd=仓库根；rollup 按 inputs 公共祖先保持输出目录结构）：
+    //   src/web/frontend/index.html        → public/index.html        （server 面板）
+    //   src/web/frontend/client/index.html → public/client/index.html （本地 client 管理面）
+    rollupOptions: {
+      input: {
+        main: 'src/web/frontend/index.html',
+        client: 'src/web/frontend/client/index.html',
+      },
+    },
   },
   server: {
     port: 5180,

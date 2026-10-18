@@ -1,0 +1,134 @@
+// nx-as client 的 action 表：CLI（nx-as client ...）与本地 web API（/api/client/*）同源
+// 形状与 src/modules/*/index.js 一致，但独立顶层——不进 server 面板的 tab/注册表体系
+import {
+  loadClientConfig, updateClientConfig, listTunnels,
+  startGost, stopGost, gostStatus, remoteList, registerTunnel, unregisterTunnel, doctor,
+} from './service.js';
+
+export const CLIENT_ACTIONS = [
+  {
+    id: 'client.configGet',
+    cli: ['client', 'config'],
+    http: ['GET', '/api/client/config'],
+    summary: '查看 client 连接配置（token 脱敏）',
+    run: async () => {
+      const c = await loadClientConfig();
+      return {
+        server: c.server.api,
+        token: c.server.token ? c.server.token.slice(0, 12) + '****' : '',
+        relay: c.relay.url,
+        gostBin: c.gost.bin,
+        tunnels: c.tunnels.length,
+        configPath: (await import('./service.js')).CLIENT_CONFIG_PATH,
+      };
+    },
+    render: (r) => [
+      `server:   ${r.server || '(未配置)'}`,
+      `token:    ${r.token || '(未配置)'}`,
+      `relay:    ${r.relay || '(未配置)'}`,
+      `gost:     ${r.gostBin}`,
+      `隧道数:   ${r.tunnels}`,
+      `配置文件: ${r.configPath}`,
+    ].join('\n'),
+  },
+  {
+    id: 'client.configSet',
+    cli: ['client', 'config', 'set'],
+    http: ['POST', '/api/client/config'],
+    summary: '写连接配置（--server/--token/--relay/--gost-bin；至少给一项）',
+    flags: {
+      server: { type: 'string' },
+      token: { type: 'string' },
+      relay: { type: 'string' },
+      'gost-bin': { type: 'string' },
+    },
+    run: async (ctx) => {
+      const patch = {};
+      if (ctx.server !== undefined) patch.server = { api: ctx.server, token: (await loadClientConfig()).server.token };
+      if (ctx.token !== undefined) {
+        const cur = await loadClientConfig();
+        patch.server = { ...(patch.server || { api: cur.server.api }), token: ctx.token };
+      }
+      if (ctx.relay !== undefined) patch.relay = { url: ctx.relay };
+      if (ctx['gost-bin'] !== undefined) patch.gost = { bin: ctx['gost-bin'] };
+      if (!Object.keys(patch).length) {
+        throw Object.assign(new Error('至少给一项：--server / --token / --relay / --gost-bin'), { code: 'INVALID_INPUT' });
+      }
+      const next = await updateClientConfig(patch);
+      return { status: 'ok', server: next.server.api, relay: next.relay.url, token: next.server.token ? next.server.token.slice(0, 12) + '****' : '' };
+    },
+    render: (r) => `已保存: server=${r.server || '(空)'} relay=${r.relay || '(空)'} token=${r.token || '(空)'}`,
+  },
+  {
+    id: 'client.register',
+    cli: ['client', 'register'],
+    http: ['POST', '/api/client/register'],
+    summary: '一键注册穿透：server 写 conf + 本地 gost -L + 自动生效',
+    args: [{ name: 'name', required: true }, { name: 'local', required: true }],
+    flags: { 'public-port': { type: 'number' } },
+    run: (ctx) => registerTunnel({ name: ctx.name, local: Number(ctx.local), public: ctx['public-port'] }),
+    render: (r) => `已注册: ${r.tunnel.name}（本地 :${r.tunnel.local} → 公网 :${r.tunnel.public}）\n公网入口: ${r.url || '(server 未返回)'}\n访问需 device token 或登录`,
+  },
+  {
+    id: 'client.unregister',
+    cli: ['client', 'unregister'],
+    http: ['POST', '/api/client/unregister'],
+    summary: '注销隧道：本地清单移除 + server 侧 conf 删除',
+    args: [{ name: 'name', required: true }],
+    run: (ctx) => unregisterTunnel({ name: ctx.name }),
+    render: (r) => `已注销: ${r.removed.name}（本地 + server 侧）`,
+  },
+  {
+    id: 'client.tunnels',
+    cli: ['client', 'list'],
+    http: ['GET', '/api/client/tunnels'],
+    summary: '本地隧道清单（含 gost 进程状态）',
+    run: async () => ({ tunnels: await listTunnels(), gost: await gostStatus() }),
+    render: (r) => [
+      `gost: ${r.gost.running ? `运行中 (pid ${r.gost.pid})` : '未运行'}  隧道 ${r.gost.tunnels} 条  二进制 ${r.gost.bin}`,
+      ...r.tunnels.map((t) => `  ${t.name.padEnd(16)} 本地:${String(t.local).padEnd(6)} 公网:${String(t.public).padEnd(6)}`),
+      r.tunnels.length ? '' : '  (空 — nx-as client register <名> <本地端口>)',
+    ].filter((l) => l !== '').join('\n'),
+  },
+  {
+    id: 'client.remoteList',
+    cli: ['client', 'remote-list'],
+    http: ['GET', '/api/client/remote'],
+    summary: 'server 侧已注册隧道（含可点击的公网 URL）',
+    run: () => remoteList(),
+    render: (r) => [
+      `server: ${r.host || '(未配置)'}`,
+      ...r.tunnels.map((t) => `  ${t.enabled ? '·' : '×'} ${t.name.padEnd(16)} 公网:${String(t.public || '?').padEnd(6)} ${t.url || ''}${t.enabled ? '' : '（已停用）'}`),
+      r.tunnels.length ? '' : '  (server 侧暂无 nxas-tunnel-*.conf)',
+    ].filter((l) => l !== '').join('\n'),
+  },
+  {
+    id: 'client.start',
+    cli: ['client', 'start'],
+    http: ['POST', '/api/client/gost/start'],
+    summary: '启动 gost 隧道进程（聚合全部本地 -L）',
+    run: () => startGost(),
+    render: (r) => `gost ${r.status}（pid ${r.pid}，${r.tunnels} 条隧道）`,
+  },
+  {
+    id: 'client.stop',
+    cli: ['client', 'stop'],
+    http: ['POST', '/api/client/gost/stop'],
+    summary: '停止 gost 隧道进程',
+    run: () => stopGost(),
+    render: (r) => `gost ${r.status}${r.pid ? `（原 pid ${r.pid}）` : ''}`,
+  },
+  {
+    id: 'client.doctor',
+    cli: ['client', 'doctor'],
+    http: ['GET', '/api/client/doctor'],
+    summary: '自检：配置/凭据/gost 二进制/连通性',
+    run: () => doctor(),
+    render: (r) => [
+      `配置文件: ${r.config}`,
+      `配置完整: ${r.config ? 'yes' : 'no（缺 server/token/relay）'}`,
+      `server:   ${r.server}`,
+      `gost:     ${r.gostBin}`,
+    ].join('\n'),
+  },
+];

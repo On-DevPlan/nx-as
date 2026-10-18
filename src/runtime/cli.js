@@ -2,9 +2,20 @@ import { applySpec, cliPathsOf, usageOf } from './spec.js';
 import { CODES } from '../core/errors.js';
 import { VERSION } from '../core/version.js';
 import { ACTIONS } from '../index.js';
+import { CLIENT_ACTIONS } from '../client/actions.js';
 
 export { VERSION };
-export const MODULE_IDS = ['auth', 'cert', 'gateway', 'nginx', 'system'];
+export const MODULE_IDS = ['auth', 'cert', 'gateway', 'nginx', 'system', 'client'];
+
+// 本地 client 守护命令（serve 型）：起本地管理面 web
+async function cmdClientServe(ctx) {
+  const { startClientServer } = await import('../client/server.js');
+  await startClientServer({ port: ctx.port ?? 7890, open: !ctx['no-open'] });
+  const shutdown = () => process.exit(0);
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+  return new Promise(() => {}); // 常驻
+}
 
 // ---------- 平台命令（不属于任何业务域；与模块 action 合成同一张 ALL_COMMANDS） ----------
 
@@ -63,7 +74,7 @@ async function cmdWeb(ctx) {
 }
 
 function allCommands() {
-  return [...BUILTINS, ...ACTIONS];
+  return [...BUILTINS, ...ACTIONS, ...CLIENT_ACTIONS];
 }
 
 function helpEntries(topic) {
@@ -111,6 +122,17 @@ const BUILTINS = [
       'no-open': { type: 'boolean' },
     },
     run: (ctx) => cmdWeb(ctx),
+    render: () => '',
+  },
+  {
+    id: 'client.serve',
+    cli: ['client', 'serve'],
+    summary: '本地启动 client 管理面 web（127.0.0.1:7890，连接 server / 注册穿透 / 打开隧道 URL）',
+    flags: {
+      port: { type: 'number', default: 7890 },
+      'no-open': { type: 'boolean' },
+    },
+    run: (ctx) => cmdClientServe(ctx),
     render: () => '',
   },
   {
