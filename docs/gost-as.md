@@ -174,3 +174,23 @@ gost-as 是 nx-as 仓库的第三个 Docker target（`base` 纯权限壳 / `full
 穿透基座），复用同一套鉴权决策（`gateway/check.js`）、配置文件管理器（`nginx/files.js`）
 与面板。相关源码：`docker/entrypoint-gost.sh`、`docker/gost-nginx.conf.template`、
 `docker/gost-init.mjs`、`scripts/nxas-tunnel.mjs`、`docker-compose.gost-as.yml`。
+
+## 9. 镜像发布（CI）
+
+`.github/workflows/gost-as-image.yml` 在 `v*` tag 或 manual dispatch 时自动：
+
+1. 构建 Dockerfile `gost` target（`gost relay + nginx + nx-as`）
+2. 冒烟契约：起容器 30s 内 `nx-as 网关 127.0.0.1:7801` + `gost relay :8442` 同时就绪
+3. 推送 `ghcr.io/on-devplan/gost-as:<version>` 与 `:latest`
+
+手动触发：
+
+```bash
+gh workflow run "gost-as image"
+# 拉取到 47：
+ssh 47 "cd /opt/gost-as && docker compose pull && docker compose up -d"
+```
+
+需要同时推 Docker Hub：仓库加 secrets `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`，
+在 workflow 的 build job 末尾加一段 `docker/login-action@v3` 登录 + 多加一个 tag 推送即可
+（参考 `docker-image.yml` 的 `docker push` 步骤结构）。

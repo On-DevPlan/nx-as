@@ -13,7 +13,14 @@
 
 ### Added
 
+- **CI：gost-as 镜像自动发布**：新增 `.github/workflows/gost-as-image.yml`，在 `v*` tag 或
+  manual dispatch 时自动构建 Dockerfile `gost` target 并推送 `ghcr.io/on-devplan/gost-as:0.8.0`
+  + `:latest`，含三进程冒烟（nginx 入口 / gost relay / nx-as 网关契约）。`npm-publish.yml`
+  在打 tag 时不会自动 dispatch 它（v* tag push 事件本身触发）；手动触发用
+  `gh workflow run "gost-as image"`。
 - **审计日志页（system tab）**：表格列时间 / 动作（徽章） / 详情（JSON 单行截断，点击行展开全文）；
+  按动作下拉（从已拉取列表枚举 distinct action）与文本包含（动作/详情）双过滤；只读、limit 200
+  默认（上限 1000）。后端新增 `GET /api/audit` / `nx-as audit`，复用 `core/audit.js` 的 JSONL 存储。
   按动作下拉（从已拉取列表枚举 distinct action）与文本包含（动作/详情）双过滤；只读、limit 200
   默认（上限 1000）。后端新增 `GET /api/audit` / `nx-as audit`，复用 `core/audit.js` 的 JSONL 存储。
 - **设备/会话管理页升级**：设备清单表格化（名称+id、scope 徽章 admin/client、active/revoked、
