@@ -1,0 +1,70 @@
+# gost-as 主入口模板（host 网络形态；entrypoint-gost.sh 渲染）
+#
+# gost-as = gost（内网穿透 relay）+ nginx（公网鉴权入口）+ nx-as（鉴权决策 + 配置文件管理器）
+#
+# 端口模型：
+#   ${NXAS_LISTEN_PORT}   面板/登录主入口（本文件，唯一固定公网页面端口）
+#   <本地服务端口>         每个隧道一个独立 server 块 —— 由「nginx 配置文件管理器」动态写入
+#                         /etc/nginx/http.d/nxas-tunnel-*.conf（注册指令：scripts/nxas-tunnel.mjs）
+#   ${NXAS_GOST_PORT}     gost relay 隧道入口（本地 gost 客户端连入；不经 nginx）
+#
+# 隧道 server 块的委托端点每个 server 自带（nginx internal 只在 server 内生效），
+# 登录 cookie 是 host 级（不含端口）：在任一端口登录后，其余隧道端口直接放行。
+server {
+    listen ${NXAS_LISTEN_PORT};
+    server_name _;
+    absolute_redirect off;
+${NXAS_TLS_BLOCK}
+
+    # ── nx-as 唯一命名空间：登录/鉴权/管理面 ──
+    location /_nxas/ {
+        proxy_pass http://127.0.0.1:${NXAS_API_PORT}/_nxas/;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_read_timeout 1h;
+    }
+
+    # ── 面板 SPA 静态资源 ──
+    location /assets/ {
+        proxy_pass http://127.0.0.1:${NXAS_API_PORT}/assets/;
+    }
+    location ~ ^/(favicon\.ico|favicon-\d+\.png|logo(-rounded)?\.png|manifest\.webmanifest)$ {
+        proxy_pass http://127.0.0.1:${NXAS_API_PORT};
+    }
+
+    # ── 委托端点（本 server 内部使用）──
+    location = /_nxas/auth-internal {
+        internal;
+        proxy_pass http://127.0.0.1:${NXAS_API_PORT}/_nxas/auth/check;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header Cookie $http_cookie;
+        proxy_set_header X-Original-Uri $request_uri;
+        proxy_set_header X-Original-Method $request_method;
+        proxy_set_header X-Forwarded-For $remote_addr;
+    }
+
+    # ── 主入口页面（面板 SPA）：登录后可见 ──
+    location / {
+        auth_request /_nxas/auth-internal;
+        auth_request_set $nxas_device $upstream_http_x_device_id;
+        error_page 401 = @nxas_login;
+        proxy_pass http://127.0.0.1:${NXAS_API_PORT};
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_read_timeout 1h;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        add_header X-Nxas-Device $nxas_device always;
+    }
+
+    location @nxas_login {
+        return 302 /_nxas/login?next=$request_uri;
+    }
+}

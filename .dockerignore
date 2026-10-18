@@ -1,6 +1,6 @@
-# 构建产物 / 本地运行残留
+# 构建产物 / 本地运行残留（镜像内由 builder 阶段重新构建）
 node_modules/
-src/web/public/
+public/
 .tool/
 *.log
 

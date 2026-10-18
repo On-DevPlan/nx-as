@@ -14,7 +14,12 @@ export function shouldServeLocally(url) {
 export default defineConfig({
   root: 'src/web/frontend',
   plugins: [react()],
-  build: { outDir: '../public', emptyOutDir: true },
+  build: {
+    // 构建产物落仓库根 public/（src/web/frontend 上溯 3 层；不进 src/，git 不入库）
+    outDir: '../../../public',
+    // outDir 在 root 之外时 vite 默认不清空，必须显式开启（否则旧 hashed 资源残留）
+    emptyOutDir: true,
+  },
   server: {
     port: 5180,
     proxy: {

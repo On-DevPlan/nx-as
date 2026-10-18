@@ -97,7 +97,12 @@ async function _handleGateway(req, res, url) {
   }
 
   // ④ device-auth（决策逻辑与 nginx 模式 /auth/check 同源：check.js）
-  const r = await decide({ authorization: req.headers.authorization, rawUri: url.pathname + url.search, ip });
+  const r = await decide({
+    authorization: req.headers.authorization,
+    rawUri: url.pathname + url.search,
+    ip,
+    userAgent: req.headers['user-agent'] || '',
+  });
   if (r.decision === 'throttled') {
     return sendJson(res, 429, { ok: false, error: 'Too many failed attempts' }, { 'Retry-After': String(r.retryAfterSec) });
   }

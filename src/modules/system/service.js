@@ -1,4 +1,5 @@
 import { loadStore } from '../../core/store.js';
+import { listAudit } from '../../core/audit.js';
 import { VERSION } from '../../runtime/cli.js';
 
 // 聚合模块：bootstrap / health / routes（无视图）
@@ -52,5 +53,12 @@ export async function health() {
 
 export async function routesQuery(ctx) {
   return routesTable({ http: ctx.http });
+}
+
+// 审计列表（只读）：JSONL 逐条倒序给前端（新在前），limit 默认与 listAudit 一致
+export async function auditList(ctx) {
+  const limit = Number.isInteger(ctx.limit) && ctx.limit > 0 ? Math.min(ctx.limit, 1000) : 200;
+  const entries = await listAudit({ limit });
+  return { entries: entries.reverse(), limit };
 }
 

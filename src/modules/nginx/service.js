@@ -7,6 +7,7 @@
 import { loadStore } from '../../core/store.js';
 import { badInput, blocked, notFound } from '../../core/errors.js';
 import { appendAudit } from '../../core/audit.js';
+import { constants as FS_CONSTANTS } from 'node:fs';
 
 const NGINX_BIN = process.env.NXAS_NGINX_BIN || 'nginx';
 // 容器内以 root 直跑 nginx，无需 sudo（NXAS_NGINX_SUDO=0）；宿主机默认走 sudo -n 白名单
@@ -105,6 +106,7 @@ server {
     location / {
         proxy_pass http://127.0.0.1:${gatewayPort};
         proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
         proxy_read_timeout 1h;
@@ -141,6 +143,16 @@ export function isLinux() {
   return process.platform === 'linux';
 }
 
+// 统一的 nginx 执行入口（sudo 前缀 + 二进制 + 参数）。
+// sudoers 白名单仍然只有 nginx -t / nginx -s reload 两条——本函数不扩大授权面。
+export async function nginxExec(args) {
+  // 容器模式（NXAS_NGINX_SUDO=0）SUDO 为空数组：直接 run(NGINX_BIN, ...args)。
+  // 不能走 run(...SUDO, [...])——空数组展开后数组本身会落到 cmd 位置（execFile 报
+  // "file argument must be string"）。
+  if (SUDO.length) return run(...SUDO, [NGINX_BIN, ...args]);
+  return run(NGINX_BIN, ...args);
+}
+
 async function assertLinux() {
   // 测试注入：单测用 NXAS_TEST_ALLOW_NON_LINUX=1 验证文件层逻辑（执行层已被 mock）
   if (!isLinux() && process.env.NXAS_TEST_ALLOW_NON_LINUX !== '1') {
@@ -152,26 +164,41 @@ async function assertLinux() {
 
 export async function nginxStatus() {
   const cfg = await nginxConfig();
-  const out = { platform: process.platform, managedPath: cfg.managedPath || DEFAULT_MANAGED, enabled: Boolean(cfg.enabled), nginx: null, drifted: null, sudoers: null };
-  if (!isLinux()) return out;
+  const managedPath = cfg.managedPath || DEFAULT_MANAGED;
+  const out = { platform: process.platform, managedPath, managedDir: dirnameOf(managedPath), dirWritable: null, enabled: Boolean(cfg.enabled), nginx: null, drifted: null, sudoers: null };
+  const fsp = (await import('node:fs/promises')).default;
 
-  // nginx 进程/服务状态
+  // 配置漂移 + 目录写权探测：纯文件层操作，平台无关（Windows 开发态同样可见漂移横幅）
   try {
-    const { stdout } = await run(...(process.env.NXAS_NGINX_SUDO === '0' ? [NGINX_BIN, '-v'] : ['systemctl', 'is-active', 'nginx']));
-    out.nginx = { service: stdout.trim() || 'unknown' };
-  } catch (e) {
-    out.nginx = { service: e.stdout?.trim() || 'inactive' };
-  }
-
-  // 配置漂移：磁盘文件 ≠ 模板渲染产物
-  try {
-    const fsp = (await import('node:fs/promises')).default;
     const disk = await fsp.readFile(out.managedPath, 'utf8');
     const secret = await machineSecret();
     const expected = cfg.domain ? renderTemplate(cfg, { machineSecret: secret }) : null;
     out.drifted = expected ? disk.trim() !== expected.trim() : null;
   } catch (e) {
     out.drifted = e.code === 'ENOENT' ? 'missing' : 'unreadable';
+  }
+  try {
+    await fsp.access(out.managedDir, FS_CONSTANTS.W_OK);
+    out.dirWritable = true;
+  } catch {
+    out.dirWritable = false;
+  }
+  if (!isLinux()) return out; // 以下为 Linux 专属探测（systemctl / sudoers）
+
+  // nginx 进程/服务状态 + 版本（-v 不在 sudoers 白名单里，本来也不需要 root）
+  try {
+    const { stdout } = process.env.NXAS_NGINX_SUDO === '0'
+      ? await run(NGINX_BIN, '-v')
+      : await run('systemctl', 'is-active', 'nginx');
+    out.nginx = { service: stdout.trim() || 'unknown' };
+  } catch (e) {
+    out.nginx = { service: e.stdout?.trim() || 'inactive' };
+  }
+  try {
+    const { stderr } = await run(NGINX_BIN, '-v');
+    out.nginx.version = /nginx\/(\S+)/.exec(stderr)?.[1] || null;
+  } catch {
+    out.nginx.version = null;
   }
 
   // sudoers 探测（能 -t 即视为授权）
@@ -182,6 +209,11 @@ export async function nginxStatus() {
     out.sudoers = /sudo.*password|a password is required/i.test(e.stderr || '') ? 'needs-password' : 'no-sudoers';
   }
   return out;
+}
+
+function dirnameOf(p) {
+  const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
+  return i > 0 ? p.slice(0, i) : p;
 }
 
 /**
@@ -269,6 +301,7 @@ export async function nginxPreview() {
 export async function nginxSetup() {
   const cfg = await nginxConfig();
   const managedPath = cfg.managedPath || DEFAULT_MANAGED;
+  const managedDir = dirnameOf(managedPath);
   return {
     sudoers: `nxas ALL=(root) NOPASSWD: ${NGINX_BIN} -t, ${NGINX_BIN} -s reload`,
     steps: [
@@ -277,7 +310,14 @@ export async function nginxSetup() {
       `sudo touch ${managedPath} && sudo chown root:nxas ${managedPath} && sudo chmod 664 ${managedPath}`,
       `sudo nginx -t && sudo systemctl reload nginx`,
     ],
-    note: 'nx-as 服务用户须在 nxas 组；managedPath 所在目录不给 nx-as 写权（防止改其它配置）',
+    stepsFullManage: [
+      '（可选）完整管理授权：面板获得托管目录内 *.conf 的新建/删除/停用能力——',
+      `  sudo chgrp nxas ${managedDir} && sudo chmod 775 ${managedDir}`,
+      `  说明: 目录内已存在的 root 属主文件仍不可写（需 chown 给 nxas 或用 sudo 编辑）；`,
+      `        主 nginx.conf 与托管目录之外的文件任何情况下都不可写。`,
+    ],
+    note: 'nx-as 服务用户须在 nxas 组；不执行完整管理授权时，面板只能编辑托管单文件内容',
     managedPath,
+    managedDir,
   };
 }

@@ -12,9 +12,10 @@ process.env.NX_AS_STORE = join(ROOT, '.tool', 'test-store', 'gateway-unit.json')
 const svc = await imp('src/modules/gateway/service.js');
 const { issueTicket, resolveTicket, verifyTicket, __resetTicketsForTest } =
   await imp('src/runtime/gateway/tickets.js');
-const { ticketFromUri } = await imp('src/runtime/gateway/check.js');
+const { ticketFromUri, decide } = await imp('src/runtime/gateway/check.js');
 const { retryAfterMs, recordFailure, backoffDelayMs, resetThrottle } = await imp('src/runtime/gateway/throttle.js');
 const { resetStoreCache } = await imp('src/core/store.js');
+const session = await imp('src/runtime/gateway/session.js');
 
 // ---------- device token ----------
 
@@ -47,6 +48,63 @@ test('device token: 签发→校验→吊销→再校验失败', async () => {
 test('device token: 未知名/超长名拒绝', async () => {
   await assert.rejects(() => svc.issueToken({}), (e) => e.code === 'INVALID_INPUT');
   await assert.rejects(() => svc.issueToken({ name: 'x'.repeat(65) }), (e) => e.code === 'INVALID_INPUT');
+});
+
+test('device token: scope 落字段（admin/client，非法值拒绝，缺省 admin 向后兼容）', async () => {
+  resetStoreCache();
+  const { device: client } = await svc.issueToken({ name: 'client-dev', scope: 'client' });
+  const { device: def } = await svc.issueToken({ name: 'default-dev' });
+  await assert.rejects(() => svc.issueToken({ name: 'x', scope: 'root' }), (e) => e.code === 'INVALID_INPUT');
+  const list = await svc.listDevices();
+  assert.equal(list.find((d) => d.id === client.id).scope, 'client');
+  assert.equal(list.find((d) => d.id === def.id).scope, 'admin', '缺省 admin');
+});
+
+test('device token: 校验通过记录最近使用 IP/UA', async () => {
+  resetStoreCache();
+  const { token, device } = await svc.issueToken({ name: 'meta-dev' });
+  resetStoreCache();
+  await svc.verifyDeviceToken(`Bearer ${token}`, { ip: '203.0.113.9', ua: 'Mozilla/5.0 TestUA' });
+  const list = await svc.listDevices();
+  const d = list.find((x) => x.id === device.id);
+  assert.equal(d.lastIp, '203.0.113.9');
+  assert.equal(d.lastUa, 'Mozilla/5.0 TestUA');
+});
+
+test('device token: revoke-all 全部吊销（含应急语义）', async () => {
+  resetStoreCache();
+  await svc.issueToken({ name: 'ra-1' });
+  await svc.issueToken({ name: 'ra-2', scope: 'client' });
+  const before = (await svc.listDevices()).filter((d) => !d.revoked).length;
+  assert.ok(before >= 2, '测试前置：至少 2 台活跃');
+  const r = await svc.revokeAllDevices();
+  assert.equal(r.revoked, before, '吊销数 = 吊销前活跃数');
+  const list = await svc.listDevices();
+  assert.ok(list.every((d) => d.revoked), '全部 revoked');
+  const again = await svc.revokeAllDevices();
+  assert.equal(again.revoked, 0, '重复调用幂等');
+});
+
+test('会话回查：吊销设备后其已发会话立即失效（decide 拒绝）', async () => {
+  resetStoreCache();
+  resetThrottle();
+  const { device } = await svc.issueToken({ name: 'sess-revoke' });
+  const { value } = session.issueSessionCookie(device.id);
+  const cookieHeader = `nxas_session=${encodeURIComponent(value)}`;
+
+  // 未吊销：会话放行
+  const allow = await decide({ cookieHeader, ip: '198.51.100.7' });
+  assert.equal(allow.decision, 'allow');
+  assert.equal(allow.device.id, device.id);
+
+  // 吊销后：同一 cookie 立即拒绝（无凭据 → 静默 deny-auth）
+  await svc.revokeDevice({ id: device.id });
+  const deny = await decide({ cookieHeader, ip: '198.51.100.7' });
+  assert.equal(deny.decision, 'deny-auth');
+
+  // isDeviceAlive 直查语义
+  assert.equal(await svc.isDeviceAlive(device.id), false);
+  assert.equal(await svc.isDeviceAlive('dev_unknown'), false);
 });
 
 // ---------- SSE 短票 ----------

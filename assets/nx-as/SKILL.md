@@ -1,11 +1,13 @@
 ---
 name: nx-as
-description: 当用户要"把 nx-as 作为鉴权网关跑 pi-web/管理设备 token/配置 Bearer 代理/给自有应用套鉴权容器"，或提到 nx-as、npx-ai-server、nx-apiserver、个人 agent 网关、pi-web 代理、device token、nx-as Docker 镜像、边车容器、FROM nx-as-base 时使用。nx-as 是 pi-web 云端个人 agent 的鉴权代理网关（nx-apiserver 语义）：CLI 与管理 API 同源。不适用于：与 nx-as 无关的通用编程问题、Claude Code 自身配置。
+description: 当用户要"管理 nginx 配置文件（多文件编辑/停用/备份还原）、把 nx-as 作为鉴权网关跑 pi-web/管理设备 token/给自有应用套鉴权容器"，或提到 nx-as、npx-ai-server、nx-apiserver、nginx 配置管理、个人 agent 网关、pi-web 代理、device token、nx-as Docker 镜像、边车容器、FROM nx-as-base 时使用。nx-as 是 nginx 配置文件管理器 + 鉴权代理网关（nx-apiserver 语义）：CLI 与管理 API 同源。不适用于：与 nx-as 无关的通用编程问题、Claude Code 自身配置。
 ---
 
-# nx-as — pi-web 鉴权代理网关（nx-apiserver）
+# nx-as — nginx 配置文件管理器 + pi-web 鉴权代理网关（nx-apiserver）
 
-pi-web（会话运行时核心，零改动）跑在 127.0.0.1:30141；nx-as 是它前面的**鉴权代理网关 + 安全启动器**：
+nx-as 的本职是 **nginx 配置文件管理器**：托管目录（默认 `/etc/nginx/conf.d`）内 `*.conf`
+的浏览/编辑/新建/停用/删除/备份还原，每次变更自动 `nginx -t`（失败还原）+ graceful reload。
+在此之上是 pi-web（会话运行时核心，零改动）的**鉴权代理网关 + 安全启动器**：
 手机/外部设备用**可吊销的 device token** 走 `/m/v1/*` 反代访问 pi-web；本机管理走 `/api/*` + Web 面板；
 CLI 与管理 API 同源（一条 action 两端暴露）。
 
@@ -25,11 +27,17 @@ CLI 与管理 API 同源（一条 action 两端暴露）。
 | 命令 | 作用 |
 |---|---|
 | `nx-as serve [--port 7801] [--host 127.0.0.1] [--no-open] [--with-web]` | 起网关（`--with-web` 同时拉起 pi-web 并注入机机密码） |
+| `nx-as nginx files` | 托管目录内配置文件清单（启用态/大小/备份/目录写权） |
+| `nx-as nginx file get <名>` / `file put <名> --from <文件>` | 读 / 写（新建或更新；备份→-t 失败还原→reload） |
+| `nx-as nginx file delete <名>` / `file toggle <名>` | 删除（先备份）/ 停用启用（.conf ↔ .conf.disabled） |
+| `nx-as nginx file backups <名>` / `file restore <名> --ts <时间戳>` | 备份清单 / 还原（当前内容先再备份） |
+| `nx-as nginx status` / `config [--preview]` / `apply` / `rollback` / `setup` / `rotate-secret` | 托管状态/引导配置（domain+证书）/回滚/部署引导（两档授权）/轮换机机密码 |
 | `nx-as web [--port 30141] [--no-open]` | 只拉起 pi-web（安全启动器：随机 PI_WEB_PASSWORD + PI_CODING_AGENT_DIR） |
-| `nx-as device issue --name <设备名>` | 直接签发 device token（管理员线下交付） |
-| `nx-as device list` / `device revoke <id>` | 设备清单 / 吊销（立即 401） |
+| `nx-as device issue --name <设备名> [--scope admin\|client]` | 直接签发 device token（管理员线下交付；面板可查看与吊销） |
+| `nx-as device list` / `device revoke <id>` / `device revoke-all` | 设备清单 / 吊销（已发会话立即失效）/ 全部吊销（应急） |
 | `nx-as auth status` / `auth rotate` | 管理密钥状态（掩码）/ 轮换 |
 | `nx-as health` / `bootstrap --json` / `routes [--http "METHOD /path"]` | 排查 / 上下文 / 命令-路由对照 |
+| `nx-as audit [--limit 200]` | 审计日志（只读，新→旧；登录/网关/nginx 变更全落审计） |
 | `nx-as skill install [name] [--to DIR] [--force]` | 装 skill 到 ~/.claude/skills（无参=默认 nx-as） |
 | `nx-as skill install --group <g>` | 一键装一组（sidecar=边车容器指南；清单 assets/groups.json） |
 | `nx-as skill list` | 可装 skill/group 清单（标默认；source=manifest\|assets-dirs） |

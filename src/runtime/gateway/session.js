@@ -3,7 +3,10 @@
 // - check.js 决策时无 Bearer 头则认 cookie（同源请求浏览器自动携带）
 // - cookie 格式: nxas_s1.<deviceId>.<过期秒>.<HMAC(serverSecret)>
 //   serverSecret = 进程随机（重启全员失效——与会话语义一致）
+// - 登录失败与网关 /m/v1 共用同一 `ip:` 节流桶（指数退避），登录成功落审计
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { retryAfterMs, recordFailure } from './throttle.js';
+import { appendAudit } from '../../core/audit.js';
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60_000;   // 7 天
 export const SESSION_COOKIE = 'nxas_session';
@@ -41,22 +44,55 @@ export function sessionFromCookieHeader(cookieHeader) {
   return m ? decodeURIComponent(m[1]) : null;
 }
 
+// 与 check.js 同语义的客户端 IP（XFF 第一跳可信——前置是本机 nginx/Caddy）
+function clientIpOf(req) {
+  const xff = req.headers['x-forwarded-for'];
+  if (xff) return String(xff).split(',')[0].trim();
+  return req.socket.remoteAddress || 'unknown';
+}
+
 // 登录端点句柄：POST /auth/login { token }（JSON）
 export async function handleLogin(req, res) {
+  const ip = clientIpOf(req);
+
+  // 节流前置查询：与网关 /m/v1 共用 ip: 桶——爆破登录和爆破 API 是同一个封锁状态
+  const blockedMs = retryAfterMs(`ip:${ip}`);
+  if (blockedMs > 0) {
+    res.writeHead(429, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Retry-After': String(Math.max(1, Math.ceil(blockedMs / 1000))),
+    });
+    return res.end(JSON.stringify({ ok: false, error: 'Too many failed attempts', code: 'THROTTLED' }));
+  }
+
   let body = '';
   req.on('data', (c) => { body += c; if (body.length > 4096) req.destroy(); });
   req.on('end', async () => {
     let token = '';
     try { token = String(JSON.parse(body || '{}').token || ''); } catch { /* 统一 401 */ }
     const { verifyDeviceToken } = await import('../../modules/gateway/service.js');
-    const device = await verifyDeviceToken(`Bearer ${token}`);
+    const device = await verifyDeviceToken(`Bearer ${token}`, {
+      ip,
+      ua: req.headers['user-agent'] || '',
+    });
     if (!device) {
-      res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      const delay = recordFailure(`ip:${ip}`);
+      appendAudit({ action: 'gw.login_fail', detail: { ip } }).catch(() => {});
+      res.writeHead(401, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'Retry-After': String(Math.max(1, Math.ceil(delay / 1000))),
+      });
       return res.end(JSON.stringify({ ok: false, error: 'token 无效', code: 'UNAUTHORIZED' }));
     }
+    appendAudit({ action: 'gw.login', deviceId: device.id, detail: { ip } }).catch(() => {});
     const { value, maxAgeSec } = issueSessionCookie(device.id);
+    // Secure 标志：经 HTTPS 反代（X-Forwarded-Proto: https）时才加——纯 HTTP 本机直连
+    // 加了浏览器就不发 cookie，登录直接坏；由部署拓扑决定而不是一刀切
+    const secure = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https' ? '; Secure' : '';
     const cookies = [
-      `${SESSION_COOKIE}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}`,
+      `${SESSION_COOKIE}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}${secure}`,
     ];
 
     // 上游会话自动交接（0 感知登录）：主进程需要密码时，nx-as 用机机信任代签，

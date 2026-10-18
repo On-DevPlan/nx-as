@@ -1,9 +1,14 @@
 import { mutateStore, loadStore } from '../../core/store.js';
 import { badInput, unauthorized } from '../../core/errors.js';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 // 单用户密钥：store.json 里存一个 token；来源优先级 CLI/环境变量 > store
 // 本机文件场景，token 明文落 store.json 可接受（与 ~/.ssh 私钥同级别的信任边界）
+
+// 恒定时间比较（先哈希对齐长度；与 gateway 的设备 token 校验同一口径）
+export function secretsEqual(a, b) {
+  return timingSafeEqual(createHash('sha256').update(String(a)).digest(), createHash('sha256').update(String(b)).digest());
+}
 
 export async function ensureToken(override) {
   if (override) return override;
@@ -21,7 +26,7 @@ export async function ensureToken(override) {
 export async function verifyToken(candidate) {
   if (!candidate) throw unauthorized();
   const expected = await ensureToken(null);
-  if (candidate !== expected) throw unauthorized('密钥不匹配');
+  if (!secretsEqual(candidate, expected)) throw unauthorized('密钥不匹配');
   return { valid: true };
 }
 

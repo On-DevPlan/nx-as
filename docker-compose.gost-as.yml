@@ -1,0 +1,27 @@
+# gost-as 部署件（47 服务器 /opt/gost-as/docker-compose.yml）
+#
+# host 网络：动态隧道端口注册零重启（nginx listen 任意端口即刻公网可达）。
+# 公网需放行（阿里云安全组）：
+#   8090  面板/登录主入口
+#   8442  gost relay 隧道入口（本地 gost 客户端连入）
+#   <每条隧道的公网端口>  如 7877（注册隧道时按需放行）
+# 数据：./data（store / 审计 / nginx 备份 / 隧道凭据）
+services:
+  gost-as:
+    image: gost-as:0.8.0
+    container_name: gost-as
+    network_mode: host
+    volumes:
+      - ./data:/data
+    environment:
+      NX_AS_TOKEN: ${NX_AS_TOKEN:-}          # 管理密钥（空=首启自动生成，见启动日志）
+      NXAS_GOST_USER: ${NXAS_GOST_USER:-gost}
+      NXAS_GOST_PASS: ${NXAS_GOST_PASS:-}    # 空=首启随机生成 → ./data/gost-auth.env
+      NXAS_LISTEN_PORT: "8090"
+      NXAS_API_PORT: "7801"
+      NXAS_GOST_PORT: "8442"
+    restart: unless-stopped
+    mem_limit: 400m
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }

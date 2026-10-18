@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -56,7 +56,8 @@ test('usageOf: enum 展开进占位符', () => {
 });
 
 // ---------- store ----------
-process.env.NX_AS_STORE = join(ROOT, '.tool', 'test-store', 'unit-store.json');
+// 临时目录隔离（固定路径会在二轮运行时带着上一轮的数据，首轮假设被打破）
+process.env.NX_AS_STORE = join(await mkdtemp(join(tmpdir(), 'core-unit-')), 'store.json');
 const { loadStore, saveStore, mutateStore, resetStoreCache } = await imp('src/core/store.js');
 
 test('store: 首次读取返回空结构；原子写后能读回', async () => {
@@ -93,5 +94,31 @@ test('store: 不同路径的缓存互不串（缓存身份含路径）', async (
   assert.equal((await loadStore(a)).machineSecret, 'AAA');
   assert.equal((await loadStore(b)).machineSecret, 'BBB');
   assert.equal((await loadStore(a)).machineSecret, 'AAA', '再读 A 仍正确');
+});
+
+test('store: 损坏/不可读必须抛错，不得静默当空（防密钥与设备清单被重置）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'store-corrupt-'));
+  const bad = join(dir, 'bad.json');
+  await writeFile(bad, '{ corrupted json !!!', 'utf8');
+  // 旧行为：任何读取异常都返回空结构 → ensureToken/mutateStore 会把密钥与设备「重置」
+  // 新行为：只有 ENOENT（首次运行）走空结构，其余一律抛错
+  await assert.rejects(() => loadStore(bad), (e) => e.code === 'INTERNAL' && /store 读取失败/.test(e.message));
+  // ENOENT 仍然返回空结构（首次运行语义不变）
+  const fresh = await loadStore(join(dir, 'missing.json'));
+  assert.deepEqual(fresh.devices, []);
+});
+
+// ---------- audit ----------
+test('audit: append/list roundtrip + limit（坏行跳过）', async () => {
+  const { appendAudit, listAudit } = await imp('src/core/audit.js');
+  // auditPath 与 store 同目录（测试 store 在临时目录 → 审计落在同一临时目录，不碰真实 ~/.nx-as）
+  await appendAudit({ action: 'device.issue', detail: { deviceId: 'dev_a' } });
+  await appendAudit({ action: 'nginx.file.put', detail: { name: 'x.conf' }, ts: Date.now() + 5 });
+  await appendAudit({ action: 'gw.login', deviceId: 'dev_a' });
+  const all = await listAudit({ limit: 200 });
+  assert.ok(all.length >= 3);
+  assert.ok(all.some((e) => e.action === 'gw.login' && e.deviceId === 'dev_a'), '顶层字段平铺');
+  const two = await listAudit({ limit: 2 });
+  assert.equal(two.length, 2, 'limit 截断');
 });
 

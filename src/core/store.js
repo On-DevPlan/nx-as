@@ -54,8 +54,14 @@ export async function loadStore(explicitPath) {
     cacheMtime = st.mtimeMs;
     cachePath = p;
     return cache;
-  } catch {
-    // 文件不存在或损坏：返回空结构（首次运行；也允许外部修好后自动恢复）
+  } catch (e) {
+    if (e.code !== 'ENOENT') {
+      // 权限/占用/损坏（EBUSY/EPERM/JSON 解析错…）绝不能静默当空 store——
+      // 空结构会顺着 ensureToken/mutateStore 把真实密钥与设备清单「重置」掉。
+      // 只有「文件确实不存在」（首次运行）才允许走空结构。
+      throw Object.assign(new Error(`store 读取失败（${p}）: ${e.message}`), { code: 'INTERNAL' });
+    }
+    // 文件不存在：返回空结构（首次运行；测试/多实例重定向后首读同此）
     cache = normalize(null);
     cacheMtime = -1;
     cachePath = '';

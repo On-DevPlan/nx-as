@@ -1,5 +1,6 @@
 // HTTP 路由：由 action.http 编译，与 CLI 同源
 // 鉴权中间件在这里做（所有 action 之前）；SSE action 特殊放行
+import { createHash, timingSafeEqual } from 'node:crypto';
 
 let compiled = null;
 
@@ -41,15 +42,50 @@ export function currentToken() {
   return runtimeToken;
 }
 
+// 恒定时间比较（先哈希对齐长度，防时序侧信道；任意输入等价耗时）
+export function safeEqual(a, b) {
+  const ha = createHash('sha256').update(String(a)).digest();
+  const hb = createHash('sha256').update(String(b)).digest();
+  return timingSafeEqual(ha, hb);
+}
+
 async function authorized(req) {
-  if (runtimeToken) {
-    const auth = req.headers.authorization || '';
-    return auth === `Bearer ${runtimeToken}`;
-  }
+  const auth = req.headers.authorization || '';
+  if (runtimeToken) return safeEqual(auth, `Bearer ${runtimeToken}`);
   // serve 之前（单测直接调 handleApi）回落到 store
   const { ensureToken } = await import('../modules/auth/service.js');
   const token = await ensureToken(null);
-  return (req.headers.authorization || '') === `Bearer ${token}`;
+  return safeEqual(auth, `Bearer ${token}`);
+}
+
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
+
+/**
+ * Origin 校验（写操作的纵深防御）。
+ *
+ * 管理面 API 是 Bearer-only（token 在 localStorage，不随请求自动携带），所以跨站请求
+ * 天然打不进来——这层校验是纵深而非唯一防线。规则：
+ *   ① 无 Origin → 放行（curl/CLI 等非浏览器客户端）
+ *   ② 浏览器自带的 Sec-Fetch-Site：same-origin / none → 放行，其余（cross-site 等）→ 拒
+ *   ③ 兜底按 Origin 解析：loopback → 放行；与 Host 头同源 → 放行（面板挂在
+ *      https://domain/_nxas/panel 时同源 POST 不再被误杀——旧实现只认 loopback，
+ *      nginx 模式公网部署所有写操作 403）；其余 → 拒（跨站）
+ * @returns {boolean} true=放行
+ */
+export function originAllowed(req) {
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  const fetchSite = String(req.headers['sec-fetch-site'] || '').toLowerCase();
+  if (fetchSite) return fetchSite === 'same-origin' || fetchSite === 'none';
+  let host;
+  try {
+    host = new URL(origin).hostname.toLowerCase();
+  } catch {
+    return false; // Origin 非法
+  }
+  if (LOOPBACK_HOSTS.has(host)) return true;
+  const reqHost = String(req.headers.host || '').toLowerCase().replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+  return host === reqHost;
 }
 
 export async function handleApi(req, res, url) {
@@ -68,19 +104,9 @@ export async function handleApi(req, res, url) {
     }
   }
 
-  // Origin 校验（写操作的纵深防御；非浏览器客户端无 Origin 放行）
-  if (method !== 'GET' && method !== 'HEAD') {
-    const origin = req.headers.origin;
-    if (origin) {
-      try {
-        const host = new URL(origin).hostname;
-        if (!['127.0.0.1', 'localhost', '::1'].includes(host)) {
-          return sendJson(res, 403, { ok: false, error: `跨站 Origin 被拒绝: ${origin}`, code: 'BLOCKED' });
-        }
-      } catch {
-        return sendJson(res, 403, { ok: false, error: `Origin 非法: ${origin}`, code: 'INVALID_INPUT' });
-      }
-    }
+  // Origin 校验（写操作的纵深防御；非浏览器客户端无 Origin 放行，同源放行——见 originAllowed）
+  if (method !== 'GET' && method !== 'HEAD' && !originAllowed(req)) {
+    return sendJson(res, 403, { ok: false, error: `跨站 Origin 被拒绝: ${req.headers.origin}`, code: 'BLOCKED' });
   }
 
   // ctx 拼装：路径占位符 → query → body，无条件合并
@@ -140,10 +166,16 @@ function sendJson(res, status, data) {
 
 // ---------- 静态服务 ----------
 
-export async function serveStatic(pathname, res) {
+export async function serveStatic(pathname, res, req) {
+  // 静态资源只读：非 GET/HEAD 一律 405（POST / 面板路径没有意义，收紧面）
+  if (req && req.method && !['GET', 'HEAD'].includes(req.method.toUpperCase())) {
+    res.writeHead(405, { 'Content-Type': 'text/plain; charset=utf-8', Allow: 'GET, HEAD' });
+    return res.end('method not allowed');
+  }
   const { join, dirname, extname } = await import('node:path');
   const { fileURLToPath } = await import('node:url');
-  const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'web', 'public');
+  // 构建产物在仓库根 public/（vite outDir；构建产物不进 src/，git 不入库、npm 随包分发）
+  const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'public');
   const fsp = (await import('node:fs/promises')).default;
   const rel = decodeURIComponent(pathname);
   const file = join(PUBLIC_DIR, rel === '/' ? 'index.html' : rel);

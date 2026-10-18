@@ -3,6 +3,7 @@ import {
   rotateToken,
   authStatus,
   mask,
+  secretsEqual,
 } from './service.js';
 import { VERSION } from '../../core/version.js';
 
@@ -16,7 +17,7 @@ const actions = [
     run: async (ctx) => {
       try {
         const expected = await ensureToken(null);
-        return { valid: ctx.token === expected, version: VERSION };
+        return { valid: Boolean(ctx.token) && secretsEqual(ctx.token, expected), version: VERSION };
       } catch {
         return { valid: false, version: VERSION };
       }

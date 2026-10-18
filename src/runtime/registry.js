@@ -4,9 +4,9 @@ import { ACTIONS } from '../index.js';
 export const MODULES = [
   { id: 'auth', view: true },
   { id: 'cert', view: true },
-  { id: 'gateway', view: false },
+  { id: 'gateway', view: true },
   { id: 'nginx', view: true },
-  { id: 'system', view: false },
+  { id: 'system', view: true },
 ];
 
 // 装载期自检：重复 id / 缺 cli / 缺 run / 路由重复 —— 启动瞬间失败

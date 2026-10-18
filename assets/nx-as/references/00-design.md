@@ -8,7 +8,7 @@
         ▼                                    ▼
   serve (node:http) ──► gateway（source-check → 节流 → device-auth → 审计 → 反代）
         │                                    │        │ 注入 Basic（机机密码）
-  静态面板 (src/web/public)                   ▼        ▼
+  静态面板 (public/，vite 产物：src/web/frontend 构建；git 不入库)                   ▼        ▼
                                     /api/* → api.js（鉴权 → 路由匹配 → ctx 拼装）
                                              │
                                     action 表（唯一真相源，src/index.js 汇总）

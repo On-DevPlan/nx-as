@@ -1,9 +1,14 @@
 import { mutateStore } from '../../core/store.js';
 import { randomBytes } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { badInput } from '../../core/errors.js';
 import {
   nginxConfig, nginxStatus, nginxApply, nginxRollback, nginxPreview, nginxSetup, isLinux,
 } from './service.js';
+import {
+  listConfigFiles, readConfigFile, writeConfigFile, deleteConfigFile, toggleConfigFile,
+  listBackups, restoreBackup,
+} from './files.js';
 import {
   isContainerMode, readTemplate, readRendered, applyTemplate, rollbackTemplate,
   TEMPLATE_PATH, RENDERED_PATH,
@@ -19,12 +24,90 @@ const actions = [
     render: (s) =>
       [
         `平台:       ${s.platform}${!isLinux() ? '  (nginx 管理仅支持 Linux)' : ''}`,
+        `nginx:      ${s.nginx?.version ? `v${s.nginx.version} · ` : ''}${s.nginx?.service ?? '?'}`,
         `托管文件:   ${s.managedPath}`,
+        `托管目录:   ${s.managedDir}${s.dirWritable === null ? '' : s.dirWritable ? '（可写：可新建/删除/停用）' : '（只读：可编辑托管单文件内容）'}`,
         `托管启用:   ${s.enabled ? 'yes' : 'no'}`,
-        `nginx 服务: ${s.nginx?.service ?? '?'}`,
         `配置漂移:   ${s.drifted === null ? 'n/a' : s.drifted ? 'yes（磁盘≠模板，Apply 可收敛）' : 'no'}`,
         `sudoers:    ${s.sudoers ?? '?'}`,
       ].join('\n'),
+  },
+  // ---------- 多文件配置管理器（宿主机模式；容器模式走模板编辑器） ----------
+  {
+    id: 'nginx.files',
+    cli: ['nginx', 'files'],
+    http: ['GET', '/api/nginx/files'],
+    summary: '托管目录内配置文件清单（启用态/大小/备份数/目录可写性）',
+    run: () => listConfigFiles(),
+    render: (r) => [
+      `托管目录: ${r.dir}${r.dirExists ? '' : '（不存在）'}${r.dirWritable ? '  [可写]' : '  [只读]'}`,
+      ...r.files.map((f) =>
+        `  ${f.managed ? '*' : ' '}${f.name.padEnd(36)} ${f.enabled ? 'enabled ' : 'disabled'} ${String(f.size).padStart(8)}B  备份 ${f.backups}${f.writable ? '' : '  (无写权)'}`),
+      r.files.length ? '' : '  (目录内暂无 *.conf)',
+    ].filter((l) => l !== '').join('\n'),
+  },
+  {
+    id: 'nginx.fileGet',
+    cli: ['nginx', 'file', 'get'],
+    http: ['GET', '/api/nginx/files/:name'],
+    summary: '读取托管目录内某个配置文件内容',
+    args: ['name'],
+    run: (ctx) => readConfigFile(ctx.name),
+    render: (r) => r.content,
+  },
+  {
+    id: 'nginx.filePut',
+    cli: ['nginx', 'file', 'put'],
+    http: ['POST', '/api/nginx/files/:name'],
+    summary: '写入/新建配置文件（备份→nginx -t 失败自动还原→reload）',
+    args: ['name'],
+    flags: { from: { type: 'string' }, content: { type: 'string' } },
+    run: async (ctx) => {
+      let content = ctx.content;
+      if (ctx.from !== undefined) content = await readFile(ctx.from, 'utf8');
+      if (typeof content !== 'string') throw badInput('需要 --from <文件> 或 --content <文本>（HTTP 用 body.content）');
+      return writeConfigFile(ctx.name, content);
+    },
+    render: (r) => `已生效: ${r.name}（${r.created ? '新建' : '更新'}，nginx -t 通过 + reload${r.backedUp ? `，已备份 ${r.backedUp}` : ''}）`,
+  },
+  {
+    id: 'nginx.fileDelete',
+    cli: ['nginx', 'file', 'delete'],
+    http: ['DELETE', '/api/nginx/files/:name'],
+    summary: '删除配置文件（先备份；nginx -t 失败自动还原）',
+    args: ['name'],
+    run: (ctx) => deleteConfigFile(ctx.name),
+    render: (r) => `已删除: ${r.name}${r.backedUp ? `（备份 ${r.backedUp}，可还原）` : ''}`,
+  },
+  {
+    id: 'nginx.fileToggle',
+    cli: ['nginx', 'file', 'toggle'],
+    http: ['POST', '/api/nginx/files/:name/toggle'],
+    summary: '停用/启用配置文件（.conf ↔ .conf.disabled，改名 + nginx -t + reload）',
+    args: ['name'],
+    run: (ctx) => toggleConfigFile(ctx.name),
+    render: (r) => `${r.enabled ? '已启用' : '已停用'}: ${r.from} → ${r.to}`,
+  },
+  {
+    id: 'nginx.fileBackups',
+    cli: ['nginx', 'file', 'backups'],
+    http: ['GET', '/api/nginx/files/:name/backups'],
+    summary: '某配置文件的备份清单（新→旧，最多保留 10 份）',
+    args: ['name'],
+    run: (ctx) => listBackups(ctx.name),
+    render: (r) => r.backups.length
+      ? r.backups.map((b) => `  ${b.ts}  ${b.size}B`).join('\n')
+      : `（${r.name} 暂无备份）`,
+  },
+  {
+    id: 'nginx.fileRestore',
+    cli: ['nginx', 'file', 'restore'],
+    http: ['POST', '/api/nginx/files/:name/restore'],
+    summary: '还原到指定备份（当前内容先再备份一份；nginx -t 失败自动回退）',
+    args: ['name'],
+    flags: { ts: { type: 'string', required: true } },
+    run: (ctx) => restoreBackup(ctx.name, ctx.ts),
+    render: (r) => `已还原: ${r.name} ← ${r.restoredFrom}（nginx -t 通过 + reload）`,
   },
   {
     id: 'nginx.configGet',
@@ -89,6 +172,7 @@ const actions = [
       [
         '部署引导（一次性，root 执行）：',
         ...r.steps.map((s) => `  ${s}`),
+        ...(r.stepsFullManage || []).map((s) => `  ${s}`),
         `  说明: ${r.note}`,
       ].join('\n'),
   },

@@ -47,6 +47,7 @@ COPY --from=builder /build/bin /app/bin
 COPY --from=builder /build/src /app/src
 COPY --from=builder /build/node_modules /app/node_modules
 COPY --from=builder /build/assets /app/assets
+COPY --from=builder /build/public /app/public
 COPY --from=builder /build/package.json /app/package.json
 
 # 容器部署件
@@ -90,3 +91,38 @@ COPY --from=builder-web /usr/local/lib/node_modules/@agegr /app/node_modules/@ag
 
 # nx-as web 启动器默认值：拉起 pi-web
 ENV NXAS_TARGET_CMD="nx-as web --port 30141 --no-open"
+
+# ── Target: gost —— gost-as：内网穿透鉴权基座 ─────────────────────────
+# gost(relay 隧道入口) + nginx(公网鉴权入口) + nx-as(鉴权决策+配置文件管理器)，
+# host 网络形态：本地 gost 客户端注册 rtcp(绑 127.0.0.1:1L)，nginx 每隧道一个 server
+# （conf.d/http.d 文件由面板配置文件管理器动态管理），公网唯一入口 = nginx。
+# 构建：docker build --target gost -t gost-as:<ver> .
+# 部署件：docker-compose.gost-as.yml（47 服务器）
+FROM alpine:3.20 AS gost-bin
+ARG GOST_VERSION=3.2.6
+RUN apk add --no-cache tar \
+    && wget -qO /tmp/gost.tgz "https://github.com/go-gost/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_amd64.tar.gz" \
+    && tar -xzf /tmp/gost.tgz -C /tmp \
+    && mv /tmp/gost /usr/local/bin/gost && chmod +x /usr/local/bin/gost \
+    && gost -V
+
+FROM runtime-common AS gost
+COPY --from=gost-bin /usr/local/bin/gost /usr/local/bin/gost
+COPY docker/gost-init.mjs /app/docker/gost-init.mjs
+COPY docker/entrypoint-gost.sh /entrypoint-gost.sh
+COPY docker/gost-nginx.conf.template /etc/nginx/http.d/gost-as.conf.template
+# host 网络形态：alpine nginx 自带的 default.conf（listen 80 default_server）
+# 会与宿主 80 端口冲突（gost-as 下 80 属宿主其它应用）——直接移除
+RUN rm -f /etc/nginx/http.d/default.conf \
+    && chmod +x /entrypoint-gost.sh /app/docker/gost-init.mjs
+
+# host 网络形态：容器内监听端口 = 宿主端口，全部动态、不走 ports 映射
+ENV NXAS_NGINX_SUDO=0 \
+    NX_AS_HOME=/data \
+    NX_AS_STORE=/data/store.json \
+    NODE_ENV=production \
+    NXAS_LISTEN_PORT=8090 \
+    NXAS_API_PORT=7801 \
+    NXAS_GOST_PORT=8442
+
+ENTRYPOINT ["/sbin/tini", "--", "/entrypoint-gost.sh"]

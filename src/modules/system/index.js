@@ -1,4 +1,4 @@
-import { bootstrap, bootstrapCli, health, routesQuery } from './service.js';
+import { bootstrap, bootstrapCli, health, routesQuery, auditList } from './service.js';
 
 const actions = [
   {
@@ -34,6 +34,18 @@ const actions = [
       (list || [])
         .map((e) => `${e.command.padEnd(46)} ${e.http ? e.http.padEnd(36) : ''} ${e.summary}`)
         .join('\n') || '(无匹配路由；用 --http "METHOD /path" 反查)',
+  },
+  {
+    id: 'system.audit',
+    cli: ['audit'],
+    http: ['GET', '/api/audit'],
+    summary: '审计日志（只读，新→旧；--limit 默认 200 上限 1000）',
+    flags: { limit: { type: 'number' } },
+    run: (ctx) => auditList(ctx),
+    render: (r) =>
+      r.entries
+        .map((e) => `${new Date(e.ts).toLocaleString().padEnd(22)}  ${String(e.action || '?').padEnd(20)}  ${e.detail ? JSON.stringify(e.detail) : ''}`)
+        .join('\n') || '(审计为空)',
   },
 ];
 

@@ -1,7 +1,7 @@
 {
   "name": "nx-as",
-  "version": "0.7.2",
-  "description": "nx-apiserver — auth gateway & safe launcher base image (nginx + nx-as); any target process behind one login",
+  "version": "0.8.0",
+  "description": "nx-apiserver — nginx config file manager & auth gateway base (nginx + nx-as); managed conf.d files with nginx -t validation, backups and reload",
   "type": "module",
   "bin": {
     "nx-as": "bin/nx-as.mjs"
@@ -9,6 +9,7 @@
   "files": [
     "bin/",
     "src/",
+    "public/",
     "assets/",
     "README.md",
     "CHANGELOG.md"

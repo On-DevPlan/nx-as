@@ -31,9 +31,9 @@ export function ticketFromUri(rawUri) {
 
 /**
  * 纯决策函数（无 HTTP 语义）。
- * @param {{authorization?: string, cookieHeader?: string, rawUri?: string, ip?: string}} input
+ * @param {{authorization?: string, cookieHeader?: string, rawUri?: string, ip?: string, userAgent?: string}} input
  */
-export async function decide({ authorization, cookieHeader, rawUri, ip = 'unknown' }) {
+export async function decide({ authorization, cookieHeader, rawUri, ip = 'unknown', userAgent = '' }) {
   // 节流前置查询（认证前按 IP）
   const ipBlock = retryAfterMs(`ip:${ip}`);
   if (ipBlock > 0) {
@@ -46,15 +46,17 @@ export async function decide({ authorization, cookieHeader, rawUri, ip = 'unknow
     return { decision: 'allow', device: { id: 'ticket', name: 'sse-ticket', ticket: true } };
   }
 
-  // 登录会话 cookie（浏览器场景：登录一次，同源请求自动携带）
+  // 登录会话 cookie（浏览器场景：登录一次，同源请求自动携带）。
+  // 回查设备有效性：吊销设备后其已发会话立即失效（cookie 本身是无状态 HMAC，靠这条锁死）。
   const { sessionFromCookieHeader, verifySessionCookie } = await import('./session.js');
+  const { isDeviceAlive } = await import('../../modules/gateway/service.js');
   const sessionDeviceId = verifySessionCookie(sessionFromCookieHeader(cookieHeader));
-  if (sessionDeviceId) {
+  if (sessionDeviceId && (await isDeviceAlive(sessionDeviceId))) {
     return { decision: 'allow', device: { id: sessionDeviceId, name: 'session' } };
   }
 
-  // device token
-  const device = await verifyDeviceToken(authorization);
+  // device token（校验通过时记录最近使用 IP/UA，与 lastUsedAt 同用 60s 节流写）
+  const device = await verifyDeviceToken(authorization, { ip, ua: userAgent });
   if (!device) {
     // 有凭据但凭据错误 → 记节流；完全无凭据（未登录浏览）→ 静默拒绝不计数
     // （页面加载几十个资源在登录前全部 401，若计数会把正常用户锁死）
@@ -87,6 +89,7 @@ export async function handleAuthCheck(req, res, url) {
     cookieHeader: req.headers.cookie,
     rawUri,
     ip,
+    userAgent: req.headers['user-agent'] || '',
   });
   if (r.decision === 'allow') {
     // X-Auth-Cred: ticket 让上游反代知道该用哪套凭据（短票不注入机机密码）

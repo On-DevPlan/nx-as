@@ -9,7 +9,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 const ROOT = join(new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 const BIN = join(ROOT, 'bin', 'nx-as.mjs');
-const PORT = 7800 + Math.floor(Math.random() * 90);
+// 7900-7989：避开常用本机服务端口段（7877 上若有真实服务，探活 JSON 校验也能兜底）
+const PORT = 7900 + Math.floor(Math.random() * 90);
 const BASE = `http://127.0.0.1:${PORT}`;
 const TOKEN = 'smoketoken';
 
@@ -60,8 +61,13 @@ server.on('exit', (code) => {
 let up = false;
 for (let i = 0; i < 40; i++) {
   try {
+    // 探活必须是 nx-as 自己的应答（带 version 的 JSON）——端口撞上别的本机服务时
+    // （HTTP 状态码五花八门但都不是 nx-as），继续重试而不是误判就绪
     const r = await fetch(`${BASE}/api/auth/verify`);
-    if (r.status < 500) { up = true; break; }
+    if (r.status < 500) {
+      const j = await r.json().catch(() => null);
+      if (j && typeof j.version === 'string') { up = true; break; }
+    }
   } catch { /* not yet */ }
   await sleep(250);
 }

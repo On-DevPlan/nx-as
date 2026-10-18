@@ -9,7 +9,7 @@ const BASE = {
 };
 
 export default defineConfig([
-  { ignores: ['src/web/public/**', 'node_modules/**', 'assets/**', '.claude/**', '.tool/**'] },
+  { ignores: ['public/**', 'node_modules/**', 'assets/**', '.claude/**', '.tool/**'] },
   {
     files: ['**/*.{js,mjs,jsx}'],
     languageOptions: {

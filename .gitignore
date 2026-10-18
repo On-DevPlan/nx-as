@@ -20,7 +20,8 @@
 # Node / build
 # ============================================================
 node_modules/
-src/web/public/
+# 面板构建产物（vite outDir，仓库根；pnpm build 重新生成，npm publish 前必跑）
+/public/
 *.log
 .DS_Store
 .claude/settings.local.json

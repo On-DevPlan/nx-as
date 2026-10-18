@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.8.0 (2026-10-18)
+
+**定位收敛：nginx 配置文件管理器为一等公民**——多文件配置管理 + 面板专业化 + 鉴权加固 + 目录结构整理。
+
+### Changed
+
+- **nginx 页面折叠重构**：核心运维（状态 / 漂移 / 托管单文件 Apply）保留在主页；不常用的「文件管理器
+  整套（list/new/edit/delete/toggle/backups/restore）」「容器模式模板编辑器」「回滚 / 轮换机机密码」
+  折叠到「管理所有配置」「管理模板」「高级」三个弹窗（通用 Modal 组件：遮罩+居中+Esc+背景关闭）。
+  state 保留在父组件，弹窗开关不丢选择/编辑/备份。
+
+### Added
+
+- **审计日志页（system tab）**：表格列时间 / 动作（徽章） / 详情（JSON 单行截断，点击行展开全文）；
+  按动作下拉（从已拉取列表枚举 distinct action）与文本包含（动作/详情）双过滤；只读、limit 200
+  默认（上限 1000）。后端新增 `GET /api/audit` / `nx-as audit`，复用 `core/audit.js` 的 JSONL 存储。
+- **设备/会话管理页升级**：设备清单表格化（名称+id、scope 徽章 admin/client、active/revoked、
+  最近使用时间与 IP/UA）；新增 [全部吊销]（应急，所有 token 与已发会话立即失效）。
+  `device issue` 支持 `--scope admin|client`（缺省 admin 向后兼容）；`verifyDeviceToken`
+  在校验路径上记录最近使用 IP/UA（60s 节流写）。
+- **吊销即失效已发会话（安全修复）**：会话 cookie 是无状态 HMAC，旧实现吊销设备后已发
+  会话仍然有效至过期；`decide()` 现在回查设备存活（`isDeviceAlive`），吊销即刻锁死全部会话。
+- **面板漂移横幅（nginx-ui 同款）**：`nginxStatus().drifted` 三态各有着落——`true` 黄条
+  「磁盘配置与模板不一致（可能被手改）」附 [查看差异]（复用 diff 组件）与 [覆盖]（空 patch
+  apply，以已保存配置的模板覆盖磁盘）；`missing` 提示未生成并给 [生成并应用]；`unreadable`
+  红条提示权限异常。`nginxStatus` 的漂移/目录写权探测改为平台无关（Windows 开发态同样可见）。
+- **托管配置保存前 diff 预览**：面板「托管单文件」卡将磁盘现网配置与最新渲染结果做行级红绿
+  diff（自研 LCS，零第三方依赖，`frontend/lib/diff.js` 可复用）；无差异时 Apply 置灰，
+  表单再改动自动恢复可用；Apply 前复核一次避免空 apply。顺带修复 `?preview=1` 布尔强转
+  （`applySpec` 只认 `true`）导致 HTTP 预览参数静默失效的问题。
+- **nginx 多文件配置管理器**（宿主机模式）：托管目录（managedPath 所在目录，默认 conf.d）内
+  `*.conf` 的浏览 / 编辑 / 新建 / 停用（`.conf` ↔ `.conf.disabled` 改名语义）/ 删除 / 备份还原。
+  固定管线：变更前自动备份（`~/.nx-as/nginx-backups/`，每文件滚动 10 份，同秒变更加序号不覆盖）
+  → `nginx -t`（失败自动还原原文，报错原文透出）→ graceful reload。
+  新命令：`nginx files`、`nginx file get|put|delete|toggle|backups|restore`（7 条 action，CLI/HTTP 同源）。
+- **安全边界两档授权**：sudoers 白名单不变（仍只有 `-t` / `-s reload`）；`nginx status` 新增
+  托管目录写权探测（dirWritable），未授权时面板禁用目录级操作；`nginx setup` 输出
+  「基础（托管单文件）/ 完整管理（目录 chgrp+775）」两档命令。主 nginx.conf 与目录外文件
+  任何情况下不可写；文件名白名单 + 穿越/符号链接拒绝。
+- **设备管理面板**（gateway 模块启用 view）：设备清单（active/revoked、last_used）+ 一键吊销；
+  签发保留 CLI-only（token 明文只走线下渠道）。面板默认 tab 改为 nginx。
+- `nginx status` 增加 nginx 版本、托管目录与写权展示。
+
+### Fixed
+
+- **nginx 模式面板写操作 403**（功能性 bug）：Origin 校验旧实现只放行 loopback，面板部署在
+  公网域名下时所有 POST 被 403。改为同源判定：`Sec-Fetch-Site`（same-origin/none 放行）+
+  Origin↔Host 同源比对 + loopback 直放；跨站照拒。管理面是 Bearer-only（token 在 localStorage，
+  不随请求自动携带），这层是纵深而非唯一防线。
+- **登录接口无节流可爆破**：`/auth/login` 失败现在与网关共用 `ip:` 节流桶（指数退避 + Retry-After），
+  成败均落审计（`gw.login` / `gw.login_fail`）。
+- 管理密钥比较全部改 timing-safe（`/api/*` Bearer、`auth.verify`；与 device token 同口径）。
+- **store 读取异常不再静默当空**：旧实现任何读取失败（损坏/EBUSY/EPERM）都返回空结构，
+  顺着 `ensureToken`/`mutateStore` 会把真实管理密钥、设备清单「重置」掉（实测触发过密钥被
+  自动轮换）。现在只有 ENOENT（首次运行）走空结构，其余一律抛错。
+- HTTPS 反代下会话 cookie 自动加 `Secure`（依赖 `X-Forwarded-Proto`，两个 nginx 模板已补透传）。
+- 静态资源只接受 GET/HEAD（其余 405）。
+
+### Changed
+
+- **面板构建产物出库**：`src/web/public/`（曾入库）→ 仓库根 `public/`（gitignore；vite `outDir`
+  显式 `emptyOutDir`）。npm `files` 与 Dockerfile 同步携带；`serveStatic` 指向新位置。
+  URL 空间不变（`/assets/*` 照旧）。
+- `server.js` 路由分派收敛：`/_nxas` 前缀剥离 + 单一分派链，删除三路重复分支（行为不变）。
+
 ## 0.7.2 (2026-10-08)
 
 **安全 review 后的一致性与加固修复**：未发现可直接利用的高危漏洞；修复 6 项「注释/死代码与实际行为不一致」及纵深防御点。
