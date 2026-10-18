@@ -67,13 +67,14 @@ jobs:
             -p 18090:8090 \
             gost-as:local
           ok=false
-          for i in $(seq 1 30); do
+          # 关键：必须显式排除 000（curl 连接失败时返回 000，0<500 为真会立刻 break）
+          for i in $(seq 1 60); do
             code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18090/api/auth/verify 2>/dev/null)
-            if [ -n "$code" ] && [ "$code" -lt 500 ]; then ok=true; break; fi
+            if [ -n "$code" ] && [ "$code" != "000" ] && [ "$code" -lt 500 ]; then ok=true; break; fi
             sleep 2
           done
           if [ "$ok" != true ]; then
-            echo "::error::gost-as 镜像 60s 内未就绪"
+            echo "::error::gost-as 镜像 120s 内未就绪"
             docker logs smoke-gostas --tail 60
             docker rm -f smoke-gostas
             exit 1
