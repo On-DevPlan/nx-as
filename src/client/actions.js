@@ -2,7 +2,7 @@
 // 形状与 src/modules/*/index.js 一致，但独立顶层——不进 server 面板的 tab/注册表体系
 import {
   loadClientConfig, updateClientConfig, listTunnels,
-  startGost, stopGost, gostStatus, remoteList, registerTunnel, unregisterTunnel, doctor,
+  startGost, stopGost, gostStatus, remoteList, registerTunnel, unregisterTunnel, doctor, reconcile,
 } from './service.js';
 
 export const CLIENT_ACTIONS = [
@@ -100,6 +100,21 @@ export const CLIENT_ACTIONS = [
       `server: ${r.host || '(未配置)'}`,
       ...r.tunnels.map((t) => `  ${t.enabled ? '·' : '×'} ${t.name.padEnd(16)} 公网:${String(t.public || '?').padEnd(6)} ${t.url || ''}${t.enabled ? '' : '（已停用）'}`),
       r.tunnels.length ? '' : '  (server 侧暂无 nxas-tunnel-*.conf)',
+    ].filter((l) => l !== '').join('\n'),
+  },
+  {
+    id: 'client.reconcile',
+    cli: ['client', 'reconcile'],
+    http: ['GET', '/api/client/reconcile'],
+    summary: '本地 ∪ server 对账（按名称对齐：两侧 ✓ / 仅 server / 仅本地）',
+    run: () => reconcile(),
+    render: (r) => [
+      `gost: ${r.gost.running ? `运行中 (pid ${r.gost.pid})` : '未运行'}${r.serverError ? `  server 错误: ${r.serverError}` : ''}`,
+      ...r.rows.map((t) => {
+        const side = t.localSide && t.serverSide ? '两侧✓' : t.serverSide ? '仅server' : '仅本地';
+        return `  ${side.padEnd(8)} ${t.name.padEnd(16)} ${t.localSide ? `本地:${t.local} → ` : ''}公网:${t.public ?? '?'} ${t.enabled === false ? '(停用)' : ''} ${t.url || ''}`;
+      }),
+      r.rows.length ? '' : '  (无隧道 — register 一条试试)',
     ].filter((l) => l !== '').join('\n'),
   },
   {

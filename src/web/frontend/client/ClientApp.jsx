@@ -6,14 +6,12 @@ import { api } from './api.js';
 const fmtTime = (ms) => (ms ? new Date(ms).toLocaleString() : '—');
 
 // nx-as client 面板：只做一件事——协调 gost 内网穿透的注册管理
-// （连接 server 填配置 / 本地隧道注册与启停 / server 侧隧道清单对账）
-// 边界：不代理 server 面板（nginx 管理/设备/审计都在 47 的 server 面板）；
-//       不需要注册穿透时 client 完全不必存在（按需启动，用完即走）
+// 主体是「对账表」：本地清单 ∪ server 清单按名称对齐，每条标注 两侧✓ / 仅server / 仅本地。
+// 边界：不代理 server 面板（nginx 管理/设备/审计都在 server 侧）；
+//       不需要注册穿透时 client 完全不必存在（按需启动，用完即走）。
 function ClientApp() {
   const [cfg, setCfg] = useState(null);
-  const [tunnels, setTunnels] = useState(null);
-  const [gost, setGost] = useState(null);
-  const [remote, setRemote] = useState(null);
+  const [recon, setRecon] = useState(null);
   const [doctor, setDoctor] = useState(null);
   const [form, setForm] = useState({ name: '', local: '', public: '' });
   const [msg, setMsg] = useState(null);
@@ -21,14 +19,12 @@ function ClientApp() {
 
   const refresh = useCallback(async () => {
     try {
-      const [c, t, r] = await Promise.all([
+      const [c, rc] = await Promise.all([
         api('GET', '/api/client/config'),
-        api('GET', '/api/client/tunnels'),
-        api('GET', '/api/client/remote').catch(() => null),
+        api('GET', '/api/client/reconcile'),
       ]);
       setCfg(c);
-      setTunnels(t);
-      setRemote(r);
+      setRecon(rc);
     } catch (e) { setMsg({ type: 'err', text: e.message }); }
   }, []);
   useEffect(() => { refresh(); }, [refresh]);
@@ -43,7 +39,9 @@ function ClientApp() {
     } catch (e) { setMsg({ type: 'err', text: e.message }); } finally { setBusy(false); }
   };
 
-  if (!cfg) return <Card title="nx-as client">加载中{msg?.type === 'err' ? ` — ${msg.text}` : ''}</Card>;
+  if (!cfg || !recon) return <Card title="nx-as client">加载中{msg?.type === 'err' ? ` — ${msg.text}` : ''}</Card>;
+
+  const has = (row) => row.localSide && row.serverSide;
 
   return (
     <>
@@ -52,10 +50,97 @@ function ClientApp() {
       </header>
       <main style={{ maxWidth: 960 }}>
 
+        <Card title="穿透隧道（本地 ∪ server 对账）">
+          <Row label="图例">
+            <span className="mid">
+              <span className="tag strong">两侧✓</span> 完整穿透（nginx 鉴权 + 本地 gost）
+              <span className="tag">仅server</span> 有 nginx 鉴权、本地未接管（注册同名即接管）
+              <span className="tag">仅本地</span> gost 在转发但 server 无鉴权配置（补一键注册即修复）
+            </span>
+          </Row>
+          {recon.serverError && (
+            <Row label="server"><span className="bad">拉取失败：{recon.serverError}</span></Row>
+          )}
+          <div className="dev-table">
+            <div className="dev-row dev-head">
+              <span>名称</span><span>状态</span><span>方向</span><span>server</span><span>打开</span><span>操作</span>
+            </div>
+            {recon.rows.length === 0 && (
+              <div className="dev-row"><span className="mid">暂无隧道——下方表单注册第一条</span></div>
+            )}
+            {recon.rows.map((t) => (
+              <div className="dev-row" key={t.name}>
+                <span><code>{t.name}</code></span>
+                <span>
+                  {has(t) ? <span className="tag strong">两侧✓</span>
+                    : t.serverSide ? <span className="tag">仅server</span>
+                      : <span className="tag bad">仅本地</span>}
+                  {t.enabled === false && <span className="tag bad">已停用</span>}
+                </span>
+                <span className="mid">
+                  {t.localSide ? <>本地:{t.local} → </> : <span className="mid">本地未接管 → </span>}
+                  公网:{t.public ?? '?'}
+                  {t.portConflict && <span className="bad">（两侧端口不一致！server:{t.portConflict.server} / 本地:{t.portConflict.local}）</span>}
+                </span>
+                <span className="mid">{t.serverSide ? '鉴权 ✓' : '—'}</span>
+                <span>
+                  {t.url && t.enabled !== false && t.localSide
+                    ? <a className="btn" href={`http://${t.url}`} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>打开 ↗</a>
+                    : null}
+                </span>
+                <span className="dev-act">
+                  {!t.localSide && (
+                    <Btn onClick={() => act(
+                      () => api('POST', '/api/client/register', { name: t.name, local: t.public ?? 80 }),
+                      (r) => `已接管 ${t.name}（本地:${r.tunnel.local} → 公网:${r.tunnel.public}，默认本地端口=公网端口，可注销后重注册改）`,
+                    )} disabled={busy}>接管</Btn>
+                  )}
+                  {!t.serverSide && (
+                    <Btn onClick={() => act(
+                      () => api('POST', '/api/client/register', { name: t.name, local: t.local, 'public-port': t.public }),
+                      (r) => `已补 server 鉴权配置：${r.url || ''}`,
+                    )} disabled={busy}>补注册</Btn>
+                  )}
+                  {t.localSide && (
+                    <Btn className="danger" onClick={() => {
+                      if (!confirm(`注销 ${t.name}？（本地 gost -L 与 server 鉴权配置一起删除）`)) return;
+                      act(() => api('POST', '/api/client/unregister', { name: t.name }), `已注销 ${t.name}`);
+                    }} disabled={busy}>注销</Btn>
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
+          <Row label="">
+            {recon.gost && (
+              <>
+                <Btn onClick={() => act(() => api('POST', '/api/client/gost/start'), 'gost 已启动')} disabled={busy || recon.gost.running}>启动 gost</Btn>
+                <Btn onClick={() => act(() => api('POST', '/api/client/gost/stop'), 'gost 已停止')} disabled={busy || !recon.gost.running}>停止 gost</Btn>
+                <span className="mid">{recon.gost.running ? `运行中 pid ${recon.gost.pid} · ${recon.gost.tunnels} 条 -L` : `未运行（二进制 ${recon.gost.bin}）——「两侧✓/仅本地」的隧道需要 gost 在跑才通`}</span>
+              </>
+            )}
+          </Row>
+        </Card>
+
+        <Card title="注册新隧道">
+          <Row label="说明">
+            <span className="mid">方向永远是 本地服务 → 公网端口。例：名称 sqlh、本地 7877 → 外部访问 http://server:7877（鉴权后到本地 7877）。公网端口需在 server 安全组放行。</span>
+          </Row>
+          <Row label="注册">
+            <Input value={form.name} onChange={(v) => setForm({ ...form, name: v })} placeholder="名称（sqlh）" style={{ width: 120 }} />
+            <Input value={form.local} onChange={(v) => setForm({ ...form, local: v })} placeholder="本地端口 7877" style={{ width: 140 }} />
+            <Input value={form.public} onChange={(v) => setForm({ ...form, public: v })} placeholder="公网端口（默认同本地）" style={{ width: 180 }} />
+            <Btn onClick={() => act(
+              () => api('POST', '/api/client/register', { name: form.name, local: Number(form.local), 'public-port': form.public ? Number(form.public) : undefined }),
+              (r) => `已注册 ${r.tunnel.name}（本地:${r.tunnel.local} → 公网:${r.tunnel.public}）${r.tunnel.adopted ? '——接管了既有同名条目' : ''}`,
+            )} disabled={busy || !form.name || !form.local}>一键注册（server + gost）</Btn>
+          </Row>
+        </Card>
+
         <Card title="连接配置（server / relay）">
-          <Row label="server API"><Input value={cfg.server || ''} onChange={(v) => setCfg({ ...cfg, server: v })} placeholder="http://47.110.80.47:8090/_nxas" /></Row>
-          <Row label="token"><Input value={cfg.token || ''} onChange={(v) => setCfg({ ...cfg, token: v })} placeholder="管理密钥（nxas_admin_...）" /></Row>
-          <Row label="relay"><Input value={cfg.relay || ''} onChange={(v) => setCfg({ ...cfg, relay: v })} placeholder="relay://gost:<密码>@47.110.80.47:8442" /></Row>
+          <Row label="server API"><Input value={cfg.server || ''} onChange={(v) => setCfg({ ...cfg, server: v })} placeholder="http://47.x.x.x:8090/_nxas（nginx 模式必须带 /_nxas）" /></Row>
+          <Row label="token"><Input value={cfg.token || ''} onChange={(v) => setCfg({ ...cfg, token: v })} placeholder="server 的管理密钥" /></Row>
+          <Row label="relay"><Input value={cfg.relay || ''} onChange={(v) => setCfg({ ...cfg, relay: v })} placeholder="relay://用户:密码@server:8442" /></Row>
           <Row label="gost 路径"><Input value={cfg.gostBin || ''} onChange={(v) => setCfg({ ...cfg, gostBin: v })} placeholder="gost（PATH）或绝对路径" /></Row>
           <Row label="">
             <Btn onClick={() => act(() => api('POST', '/api/client/config', { server: cfg.server, token: cfg.token, relay: cfg.relay, 'gost-bin': cfg.gostBin }), '连接配置已保存')}
@@ -64,69 +149,8 @@ function ClientApp() {
               const r = await act(() => api('GET', '/api/client/doctor'));
               if (r) setDoctor(r);
             }} disabled={busy}>自检（doctor）</Btn>
-            {doctor && (
-              <span className="mid">
-                server: {doctor.server} · gost: {doctor.gostBin}
-              </span>
-            )}
+            {doctor && <span className="mid">server: {doctor.server} · gost: {doctor.gostBin}</span>}
           </Row>
-        </Card>
-
-        <Card title="本地隧道（穿透注册）">
-          <div className="dev-table">
-            <div className="dev-row dev-head">
-              <span>名称</span><span>本地端口</span><span>公网端口</span><span>gost</span><span></span>
-            </div>
-            {(tunnels?.tunnels || []).length === 0 && (
-              <div className="dev-row"><span className="mid">暂无隧道——下方表单注册第一条</span></div>
-            )}
-            {(tunnels?.tunnels || []).map((t) => (
-              <div className="dev-row" key={t.name}>
-                <span><code>{t.name}</code></span>
-                <span>{t.local}</span>
-                <span>{t.public}</span>
-                <span className="mid">{t.gostRunning ? `pid ${t.gostPid}` : '未运行'}</span>
-                <span className="dev-act">
-                  <Btn onClick={() => act(() => api('POST', '/api/client/unregister', { name: t.name }), `已注销 ${t.name}`)}
-                       disabled={busy}>注销</Btn>
-                </span>
-              </div>
-            ))}
-          </div>
-          <Row label="注册">
-            <Input value={form.name} onChange={(v) => setForm({ ...form, name: v })} placeholder="名称（sqlh）" style={{ width: 110 }} />
-            <Input value={form.local} onChange={(v) => setForm({ ...form, local: v })} placeholder="本地端口 7877" style={{ width: 130 }} />
-            <Input value={form['public']} onChange={(v) => setForm({ ...form, public: v })} placeholder="公网端口（默认同本地）" style={{ width: 170 }} />
-            <Btn onClick={() => act(
-              () => api('POST', '/api/client/register', { name: form.name, local: Number(form.local), 'public-port': form.public ? Number(form.public) : undefined }),
-              (r) => `已注册 ${r.tunnel.name}：${r.url || ''}（server conf + 本地 gost 已生效）`,
-            )} disabled={busy || !form.name || !form.local}>一键注册（server + gost）</Btn>
-          </Row>
-          <Row label="">
-            {gost && (
-              <>
-                <Btn onClick={() => act(() => api('POST', '/api/client/gost/start'), 'gost 已启动')} disabled={busy || gost.running}>启动 gost</Btn>
-                <Btn onClick={() => act(() => api('POST', '/api/client/gost/stop'), 'gost 已停止')} disabled={busy || !gost.running}>停止 gost</Btn>
-                <span className="mid">{gost.running ? `运行中 pid ${gost.pid} · ${gost.tunnels} 条 -L` : `未运行（二进制 ${gost.bin}）`}</span>
-              </>
-            )}
-          </Row>
-        </Card>
-
-        <Card title="server 侧注册（对账清单）">
-          <Row label="边界">
-            <span className="mid">这里只读对账：client 仅协调 gost 穿透注册。nginx 管理/设备/审计都在 server 面板（47:8090），client 不代劳。</span>
-          </Row>
-          {remote === null && <Row label=""><span className="mid">无法拉取（先保存连接配置）</span></Row>}
-          {remote && remote.tunnels.length === 0 && <Row label=""><span className="mid">server 侧暂无 nxas-tunnel-*.conf</span></Row>}
-          {remote && remote.tunnels.map((t) => (
-            <Row label="" key={t.name}>
-              <span className={`tag ${t.enabled ? 'strong' : ''}`}>{t.enabled ? '·' : '×'} {t.name}</span>
-              <span className="mid">公网:{t.public || '?'}</span>
-              {t.url && <a className="btn" href={`http://${t.url}`} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>打开隧道服务 ↗</a>}
-              <span className="mid">{fmtTime(t.mtimeMs)}</span>
-            </Row>
-          ))}
         </Card>
 
         {msg && (

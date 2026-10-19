@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.9.1 (2026-10-19)
+
+**client 对账视图**：穿透隧道一张表看清「本地 ∪ server」两侧关系，修复字母名隧道端口显示。
+
+### Added
+
+- **client 对账（reconcile）**：`GET /api/client/reconcile` / `nx-as client reconcile`——本地清单
+  ∪ server 清单按名称对齐，每条标注 **两侧✓ / 仅server / 仅本地**；面板改为对账表为主体：
+  「仅server」条目（如 CLI 注册过的 sqlh）一键 [接管] 收进本地管理（register 同名幂等 upsert）；
+  「仅本地」条目一键 [补注册]（server 鉴权 conf 缺失时的自愈入口）；两侧端口不一致显式告警。
+
+### Fixed
+
+- **字母名隧道公网端口显示 `?`**：remoteList 旧实现从文件名 `-(\d+).conf` 提取端口，
+  `sqlh` 这类字母名恒为 null；改为拉取 conf 内容按 `listen <端口>` 提取，URL 里的 host
+  同时改用 hostname（修复 origin 旧端口拼出 `:8090:7877` 双端口）。
+
 ## 0.9.0 (2026-10-18)
 
 **本地 client + 面板运营深化**——穿透注册收进本地工具，审计/设备管理页齐备，保存前 diff 与漂移横幅。

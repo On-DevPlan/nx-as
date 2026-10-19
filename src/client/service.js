@@ -78,20 +78,24 @@ export async function updateClientConfig(patch) {
 
 // ---------- 本地隧道清单 ----------
 
-export async function addTunnel({ name, local, public: pub }) {
+export async function addTunnel({ name, local, public: pub, upsert = false }) {
   if (!name || !NAME_RE.test(name)) throw badInput(`非法隧道名: ${JSON.stringify(name)}（字母数字._-，32 内）`);
   if (!PORT_RE(local)) throw badInput('本地端口必须是 1-65535 整数');
   const pubPort = pub ?? local;
   if (!PORT_RE(pubPort)) throw badInput('公网端口必须是 1-65535 整数');
   if (10000 + pubPort > 65535) throw badInput(`公网端口 ${pubPort} 过大（10000+pub 超出范围）`);
   const cur = await loadClientConfig();
-  if (cur.tunnels.some((t) => t.name === name)) throw badInput(`隧道已存在: ${name}`);
-  if (cur.tunnels.some((t) => t.public === pubPort)) throw badInput(`公网端口已被占用: ${pubPort}`);
-  if (cur.tunnels.some((t) => t.local === local)) throw badInput(`本地端口已被占用: ${local}`);
+  const exist = cur.tunnels.find((t) => t.name === name);
+  if (exist && !upsert) throw badInput(`隧道已存在: ${name}（要改端口先注销再注册，或用接管语义）`);
+  if (cur.tunnels.some((t) => t.name !== name && t.public === pubPort)) throw badInput(`公网端口已被占用: ${pubPort}`);
+  if (cur.tunnels.some((t) => t.name !== name && t.local === local)) throw badInput(`本地端口已被占用: ${local}`);
   const tunnel = { name, local, public: pubPort };
-  await updateClientConfig({ tunnels: [...cur.tunnels, tunnel] });
+  const tunnels = exist
+    ? cur.tunnels.map((t) => (t.name === name ? tunnel : t)) // 接管：同名覆盖本地端口映射
+    : [...cur.tunnels, tunnel];
+  await updateClientConfig({ tunnels });
   await restartGost().catch(() => {}); // gost 不在时静默（register 只写清单，start 时拉起）
-  return tunnel;
+  return { ...tunnel, adopted: Boolean(exist) };
 }
 
 export async function removeTunnel({ name }) {
@@ -191,22 +195,24 @@ async function serverApi(method, path, body) {
   return data;
 }
 
-// server 侧隧道清单（conf.d 里的 nxas-tunnel-*.conf）
+// server 侧隧道清单（conf.d 里的 nxas-tunnel-*.conf）；公网端口从 conf 内容的 listen 提取
+// （隧道名可含字母如 sqlh，文件名不一定带数字）
 export async function remoteList() {
   const r = await serverApi('GET', '/api/nginx/files');
   const serverBase = (await loadClientConfig()).server.api || '';
   let host = '';
-  try { host = new URL(serverBase.replace(/\/_nxas\/?$/, '')).origin; } catch { /* keep empty */ }
-  return {
-    host,
-    tunnels: (r.files || [])
-      .filter((f) => f.name.startsWith('nxas-tunnel-'))
-      .map((f) => {
-        const m = /^nxas-tunnel-(.+)\.conf(\.disabled)?$/.exec(f.name);
-        const pub = Number(f.name.match(/-(\d+)\.conf/)?.[1] || 0) || null;
-        return { name: m?.[1] || f.name, public: pub, enabled: f.enabled, size: f.size, mtimeMs: f.mtimeMs, url: pub ? `${host}:${pub}/` : null };
-      }),
-  };
+  try { host = new URL(serverBase.replace(/\/_nxas\/?$/, '')).hostname; } catch { /* keep empty */ }
+  const tunnels = [];
+  for (const f of (r.files || []).filter((f) => f.name.startsWith('nxas-tunnel-'))) {
+    const m = /^nxas-tunnel-(.+)\.conf(\.disabled)?$/.exec(f.name);
+    let pub = null;
+    try {
+      const content = (await serverApi('GET', `/api/nginx/files/${encodeURIComponent(f.name)}`)).content;
+      pub = Number(/\blisten\s+(?:[\d.]*:)?(\d+)\s*;/.exec(content)?.[1]) || null;
+    } catch { /* 内容读不到时只给名字 */ }
+    tunnels.push({ name: m?.[1] || f.name, public: pub, enabled: f.enabled, size: f.size, mtimeMs: f.mtimeMs, url: pub ? `${host}:${pub}/` : null });
+  }
+  return { host, tunnels };
 }
 
 // 一键注册：server 侧先写 conf（失败不动本地，避免两侧不一致）→ 本地加隧道 + 重启 gost
@@ -261,11 +267,44 @@ server {
     }
 }
 `;
-  // server 先行（conf 幂等写入；失败抛错且本地未动）→ 本地清单 → gost 重启
+  // server 先行（conf 幂等写入；失败抛错且本地未动）→ 本地清单（同名=接管，幂等）→ gost 重启
   const r = await serverApi('POST', `/api/nginx/files/nxas-tunnel-${name}.conf`, { content: conf });
-  const tunnel = await addTunnel({ name, local, public: pub });
+  const tunnel = await addTunnel({ name, local, public: pub, upsert: true });
   await restartGost().catch(() => {});
   return { tunnel, server: r, url: (await remoteList()).tunnels.find((t) => t.name === tunnel.name)?.url || null };
+}
+
+// 对账：本地清单 ∪ server 清单按名称对齐，标注每条的两侧状态。
+// 这是面板「穿透隧道」表的唯一数据源——sqlh 这类「仅 server」条目一眼可见，
+// 配合 register 的同名接管语义（upsert）即可把 server 侧既有隧道收进本地管理。
+export async function reconcile() {
+  const local = await listTunnels();
+  const gost = await gostStatus();
+  let remoteTunnels = [];
+  let serverError = null;
+  try {
+    remoteTunnels = (await remoteList()).tunnels;
+  } catch (e) {
+    serverError = e.message;
+  }
+  const byName = new Map();
+  for (const t of local) byName.set(t.name, { name: t.name, local: t.local, public: t.public, localSide: true, serverSide: false, enabled: null, url: null });
+  for (const t of remoteTunnels) {
+    const hit = byName.get(t.name);
+    if (hit) {
+      hit.serverSide = true;
+      hit.enabled = t.enabled;
+      hit.url = t.url;
+      if (t.public && t.public !== hit.public) hit.portConflict = { server: t.public, local: hit.public };
+    } else {
+      byName.set(t.name, { name: t.name, local: null, public: t.public, localSide: false, serverSide: true, enabled: t.enabled, url: t.url });
+    }
+  }
+  return {
+    gost,
+    serverError,
+    rows: [...byName.values()].sort((a, b) => a.name.localeCompare(b.name)),
+  };
 }
 
 export async function unregisterTunnel({ name }) {
