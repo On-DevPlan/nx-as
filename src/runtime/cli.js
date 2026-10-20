@@ -22,21 +22,53 @@ async function cmdClientServe(ctx) {
 async function cmdServe(ctx) {
   const { startServer } = await import('./server.js'); // 避开 api → registry → cli 成环
   const { openBrowser } = await import('../core/open.js');
+  const { autoOpenEnabled, resolvePortConflict, describeOccupant } = await import('../core/serve-port.js');
+  const { APP_NAME } = await import('../core/paths.js');
   const port = ctx.port ?? 7801;
   const host = ctx.host || '127.0.0.1';
-  const server = await startServer({ port, host });
+  // 0.0.0.0 没法可靠地 fetch 出去：探测一律走回环，显示仍用 host（与既有输出一致）
+  const connectHost = host === '0.0.0.0' ? '127.0.0.1' : host;
+  // 开关：--no-open 与共享环境变量 NX_SERVE_NO_OPEN 任一为真都不开浏览器
+  const canOpen = autoOpenEnabled(ctx['no-open']);
 
   // serve 启动时确保有 token：CLI 参数 > 环境变量 > store 里存的 > 自动生成
+  // 密钥必须先于端口冲突处理拿到：管理面 /api/* 是 Bearer-only，
+  // 探测「端口上跑的是不是我」要带上 Authorization 头才过得去鉴权。
   const { ensureToken } = await import('../modules/auth/service.js');
   const token = await ensureToken(ctx.token);
   const { setRuntimeToken } = await import('./api.js');
   setRuntimeToken(token);
 
+  let server;
+  try {
+    server = await startServer({ port, host });
+  } catch (err) {
+    if (!err || err.code !== 'EADDRINUSE') throw err;
+
+    // 端口被占：先问一句「上面跑的是不是我」（探测带管理密钥）
+    const decision = await resolvePortConflict(port, APP_NAME, connectHost, {
+      Authorization: `Bearer ${token}`,
+    });
+
+    if (decision.action === 'reuse') {
+      // 自己的面板已经在跑：不重复启动，直接把浏览器指过去（控制台链接带密钥）
+      const consoleUrl = `http://${host}:${decision.port}/?token=${token}`;
+      console.log(`${APP_NAME} 已在运行：${consoleUrl}`);
+      console.log('直接打开浏览器（不重复启动）；如需重启请先停掉旧实例');
+      if (canOpen && host !== '0.0.0.0') openBrowser(consoleUrl);
+      return;
+    }
+
+    // 别人占的：顺延到下一个空闲端口，再起自己的面板
+    console.log(`端口 ${port} 已被占用（占用者: ${describeOccupant(decision.occupant)}），改用 ${decision.port}`);
+    server = await startServer({ port: decision.port, host });
+  }
+  const boundPort = server.address().port;
 
   const displayHost = host === '0.0.0.0' ? '0.0.0.0' : host;
-  console.log(`网关:   http://${displayHost}:${port}   (/m/v1/* 反代 pi-web，device token 鉴权)`);
-  console.log(`面板:   http://${displayHost}:${port}   (设备管理/设置，管理密钥)`);
-  console.log(`控制台: http://${displayHost}:${port}/?token=${token}   (带密钥直达，可收藏)`);
+  console.log(`网关:   http://${displayHost}:${boundPort}   (/m/v1/* 反代 pi-web，device token 鉴权)`);
+  console.log(`面板:   http://${displayHost}:${boundPort}   (设备管理/设置，管理密钥)`);
+  console.log(`控制台: http://${displayHost}:${boundPort}/?token=${token}   (带密钥直达，可收藏)`);
   console.log(`密钥:   ${token}`);
   console.log(`(管理面 /api/* 走上述密钥；网关 /_nxas/m/v1/* 走 device token：nx-as device issue --name <设备名>)`);
   console.log('提示:   模型/插件/技能管理在 pi-web 自带设置页（http://127.0.0.1:30141 或经网关 Web UI）；扩展装入 ~/.nx-as/pi-agent/extensions/');
@@ -49,7 +81,7 @@ async function cmdServe(ctx) {
     webChild = r?.child ?? null;
   }
 
-  if (!ctx['no-open'] && host !== '0.0.0.0') openBrowser(`http://127.0.0.1:${port}`);
+  if (canOpen && host !== '0.0.0.0') openBrowser(`http://127.0.0.1:${boundPort}`);
 
   const shutdown = () => {
     if (webChild) webChild.kill('SIGTERM');
@@ -102,7 +134,7 @@ const BUILTINS = [
   {
     id: 'serve',
     cli: ['serve'],
-    summary: '启动鉴权网关（/m/v1 反代 pi-web）+ Web 面板 + 管理 API',
+    summary: '启动鉴权网关（/m/v1 反代 pi-web）+ Web 面板 + 管理 API（默认 :7801；--port N 改端口；--no-open 不开浏览器；端口上已有本面板则直接打开它；NX_SERVE_NO_OPEN=1 全局不开浏览器）',
     flags: {
       port: { type: 'number', default: 7801 },
       host: { type: 'string', default: '127.0.0.1' },

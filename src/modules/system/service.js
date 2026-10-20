@@ -26,12 +26,19 @@ async function routesTable({ http } = {}) {
 
 export async function bootstrap() {
   const store = await loadStore();
+  const { APP_NAME } = await import('../../core/paths.js');
+  const app = { name: APP_NAME, version: VERSION };
   return {
+    app,
     version: VERSION,
     appStorePath: store ? undefined : undefined, // store 不暴露真实路径给 HTTP；CLI 端下面单独给
     cwdScope: process.cwd(),
     settings: store.settings,
     commands: await commandTable(),
+    // 端口探测的认领签名（跨项目统一口径）：共享 helper 的 probePanel 只认 body.data.app.name，
+    // 而 nx-as 的管理面 API 不套 {ok,data} 信封（前端 api() 直接吃裸 payload），
+    // 所以把 app 段再挂一份到 data 下——纯增量字段，不动任何既有字段名与语义。
+    data: { app },
   };
 }
 

@@ -26,7 +26,7 @@ CLI 与管理 API 同源（一条 action 两端暴露）。
 
 | 命令 | 作用 |
 |---|---|
-| `nx-as serve [--port 7801] [--host 127.0.0.1] [--no-open] [--with-web]` | 起网关（`--with-web` 同时拉起 pi-web 并注入机机密码） |
+| `nx-as serve [--port 7801] [--host 127.0.0.1] [--no-open] [--with-web]` | 起网关（`--with-web` 同时拉起 pi-web 并注入机机密码）；端口被占时见下方「端口占用」 |
 | `nx-as nginx files` | 托管目录内配置文件清单（启用态/大小/备份/目录写权） |
 | `nx-as nginx file get <名>` / `file put <名> --from <文件>` | 读 / 写（新建或更新；备份→-t 失败还原→reload） |
 | `nx-as nginx file delete <名>` / `file toggle <名>` | 删除（先备份）/ 停用启用（.conf ↔ .conf.disabled） |
@@ -48,6 +48,10 @@ CLI 与管理 API 同源（一条 action 两端暴露）。
 | `nx-as skill get [name] [ref] [--json]` | 导出 skill 上下文（外部 agent 自助获取） |
 
 模型/插件/技能/prompt 的管理都在 **pi-web 自带设置页**（或直接编辑 `~/.nx-as/pi-agent/` 下文件）——nx-as 只管鉴权与转发。
+
+**端口占用**：`serve` 的端口已被占用时，占用者就是本面板就直接打开它（不重复启动），
+占用者是别的服务就顺延到下一个空闲端口再起；两种情况都会自动开浏览器。
+`--no-open`（只影响这一次）或环境变量 `NX_SERVE_NO_OPEN=1`（所有 nx-xx 项目通用的同一个变量名）可关掉。
 
 ## 场景路由
 

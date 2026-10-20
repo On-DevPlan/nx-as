@@ -89,7 +89,7 @@ SSE 用 EventSource 时不能带 header：先 `POST /m/v1/sessions/:id/ticket`�
 
 | 命令 | 作用 |
 |---|---|
-| `nx-as serve [--port 7801] [--host] [--with-web] [--web-port]` | 起网关 + 面板；`--with-web` 同时拉起 pi-web 并注入随机 `PI_WEB_PASSWORD` |
+| `nx-as serve [--port 7801] [--host] [--no-open] [--with-web] [--web-port]` | 起网关 + 面板；`--with-web` 同时拉起 pi-web 并注入随机 `PI_WEB_PASSWORD`；端口被占时见下方「端口占用」 |
 | `nx-as web [--port 30141]` | 只拉起 pi-web（安全启动器，本机调试用） |
 | `nx-as nginx files / file get\|put\|delete\|toggle\|backups\|restore` | **配置文件管理器**（见上节） |
 | `nx-as nginx status` / `config [--preview]` / `apply` / `rollback` / `setup` / `rotate-secret` | 托管状态（版本/目录写权/漂移/sudoers）/引导配置/回滚/部署引导/轮换机机密码 |
@@ -100,6 +100,17 @@ SSE 用 EventSource 时不能带 header：先 `POST /m/v1/sessions/:id/ticket`�
 | `nx-as skill install` / `skill get` | 给 agent 装/导出使用文档 |
 
 完整 agent 使用文档：`nx-as skill get nx-as`。
+
+### 端口占用
+
+`serve` 启动时端口已被占用，会先探一下占用者是谁：
+
+- 占用者就是**本面板**（另一个 `nx-as serve`）→ 不重复启动，直接打开浏览器指向它，
+  并打印带密钥的控制台链接（`/?token=<密钥>`）；
+- 占用者是别的服务 → 顺延到**下一个空闲端口**起自己的面板，并打开浏览器指向新面板。
+
+两种情况都会自动开浏览器。用 `--no-open`（只影响这一次）或环境变量
+`NX_SERVE_NO_OPEN=1`（所有 nx-xx 项目通用的同一个变量名）可以关掉自动开浏览器。
 
 ## 安全模型
 
