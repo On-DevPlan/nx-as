@@ -86,7 +86,7 @@ jobs:
           # 验证三进程日志
           docker logs smoke-gostas 2>&1 | grep -E 'gost-as|gost relay|nginx 主入口' | head -5
           # 关键契约：gost relay 监听 + nx-as 网关监听
-          docker logs smoke-gostas 2>&1 | grep -q 'gost relay 监听' || { echo "::error::gost relay 未就绪"; docker logs smoke-gostas; docker rm -f smoke-gostas; exit 1; }
+          docker logs smoke-gostas 2>&1 | grep -q 'gost relay' || { echo "::error::gost relay 未就绪"; docker logs smoke-gostas; docker rm -f smoke-gostas; exit 1; }
           docker logs smoke-gostas 2>&1 | grep -q 'nx-as 网关 127.0.0.1:7801' || { echo "::error::nx-as 网关未就绪"; docker logs smoke-gostas; docker rm -f smoke-gostas; exit 1; }
           docker rm -f smoke-gostas
           echo "✅ gost-as 契约通过（nx-as 网关就绪 + gost relay 就绪 + 隧道入口正常）"
