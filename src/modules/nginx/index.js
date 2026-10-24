@@ -9,6 +9,9 @@ import {
   listConfigFiles, readConfigFile, writeConfigFile, deleteConfigFile, toggleConfigFile,
   listBackups, restoreBackup,
 } from './files.js';
+import { listHosts, upsertHost, removeHost, renderHostConf } from './hosts.js';
+import { upsertTunnel, removeTunnel } from './tunnel.js';
+import { certStatus, importCert, removeCert } from './cert.js';
 import {
   isContainerMode, readTemplate, readRendered, applyTemplate, rollbackTemplate,
   TEMPLATE_PATH, RENDERED_PATH,
@@ -31,6 +34,78 @@ const actions = [
         `配置漂移:   ${s.drifted === null ? 'n/a' : s.drifted ? 'yes（磁盘≠模板，Apply 可收敛）' : 'no'}`,
         `sudoers:    ${s.sudoers ?? '?'}`,
       ].join('\n'),
+  },
+  // ---------- 证书（原独立 cert 模块并入：导入即自动回填托管配置路径，无需手抄） ----------
+  {
+    id: 'nginx.certStatus',
+    cli: ['nginx', 'cert', 'status'],
+    http: ['GET', '/api/nginx/cert'],
+    summary: '证书状态（subject/notAfter/fingerprint；已导入则 HTTPS 可直接启用）',
+    run: () => certStatus(),
+    render: (r) =>
+      r.enabled
+        ? `已导入（HTTPS 可启用）
+subject:  ${r.meta.subject}
+notAfter: ${r.meta.notAfter}
+fp:       ${r.meta.fingerprintSha256}`
+        : `未导入（默认 HTTP）
+certPath: ${r.certPath}
+keyPath:  ${r.keyPath}`,
+  },
+  {
+    id: 'nginx.certImport',
+    cli: ['nginx', 'cert', 'import'],
+    http: ['POST', '/api/nginx/cert/import'],
+    summary: '导入证书（PEM 或 --cert-file/--key-file；成功即自动填入 nginx 托管配置，看板表单可直接启用 TLS）',
+    flags: {
+      'cert-file': { type: 'string' },
+      'key-file': { type: 'string' },
+      cert: { type: 'string' },
+      key: { type: 'string' },
+    },
+    run: async (ctx) => {
+      let certPem = ctx.cert;
+      let keyPem = ctx.key;
+      if (ctx['cert-file']) certPem = await readFile(ctx['cert-file'], 'utf8');
+      if (ctx['key-file']) keyPem = await readFile(ctx['key-file'], 'utf8');
+      if (!certPem || !keyPem) throw badInput('需同时提供 cert + key（PEM 字符串或 --cert-file/--key-file）');
+      return importCert({ certPem, keyPem });
+    },
+    render: (r) => `已导入并自动接入 nginx
+subject:  ${r.subject}
+notAfter: ${r.notAfter}
+下一步: 看板表单勾选 TLS 即可启用 HTTPS（路径已自动填好）`,
+  },
+  {
+    id: 'nginx.certRemove',
+    cli: ['nginx', 'cert', 'remove'],
+    http: ['POST', '/api/nginx/cert/remove'],
+    summary: '删除已导入的证书（文件 + store；托管配置 apply 后回 HTTP）',
+    run: () => removeCert(),
+    render: (r) => `已删除: ${r.removed.join(', ')}`,
+  },
+  // ---------- gost 隧道（单一模板源在 modules/nginx/tunnel.js；注册方一律走这条 action） ----------
+  {
+    id: 'nginx.tunnelApply',
+    cli: ['nginx', 'tunnel', 'apply'],
+    http: ['POST', '/api/nginx/tunnel'],
+    summary: '注册/更新 gost 隧道（服务端单一模板渲染 conf：公网端口经 SSO 鉴权 → gost 回环 → 本地服务）',
+    args: [{ name: 'name', required: true }],
+    flags: { 'public-port': { type: 'number', required: true } },
+    run: (ctx) => upsertTunnel({ name: ctx.name, public: ctx['public-port'] }),
+    render: (r) =>
+      `隧道:   ${r.name}（公网 :${r.public} → gost 回环 :${r.rtcpPort}）
+conf:  ${r.name && 'nxas-tunnel-' + r.name + '.conf'}${r.created ? '（新建）' : '（更新，备份 ' + (r.backedUp || '无') + '）'}
+鉴权:  公网流量先过 SSO 会话校验（未登录 302 → go-ah）`,
+  },
+  {
+    id: 'nginx.tunnelRemove',
+    cli: ['nginx', 'tunnel', 'remove'],
+    http: ['POST', '/api/nginx/tunnel/remove'],
+    summary: '注销 gost 隧道（删除 conf，先备份；本地 gost 客户端 -L 清单由 client 域管理）',
+    args: [{ name: 'name', required: true }],
+    run: (ctx) => removeTunnel({ name: ctx.name }),
+    render: (r) => `已注销: ${r.name}（备份 ${r.backedUp || '无'}）`,
   },
   // ---------- 多文件配置管理器（宿主机模式；容器模式走模板编辑器） ----------
   {
@@ -175,6 +250,76 @@ const actions = [
         ...(r.stepsFullManage || []).map((s) => `  ${s}`),
         `  说明: ${r.note}`,
       ].join('\n'),
+  },
+  // ---------- 看板（hosts）：站点反代 / 端口转发表单 ↔ 配置文件 ----------
+  {
+    id: 'nginx.hosts',
+    cli: ['nginx', 'hosts'],
+    http: ['GET', '/api/nginx/hosts'],
+    summary: '看板清单：托管目录内条目（kind/域名/端口/上游/TLS/WS，带 spec 的可表单编辑）',
+    run: () => listHosts(),
+    render: (r) => [
+      `托管目录: ${r.dir}${r.dirExists ? '' : '（不存在）'}${r.dirWritable ? '  [可写]' : '  [只读]'}`,
+      ...r.hosts.map((h) => {
+        const head = h.kind === 'site' ? (h.domains || []).join(', ')
+          : h.kind === 'port' ? `:${h.listenPort}` : h.kind === 'gateway' ? (h.domains || []).join(', ') : '-';
+        const mid = h.upstream ? ` → ${h.upstream}` : '';
+        const badges = [h.tls ? 'tls' : '', h.ws ? 'ws' : '', h.auth ? 'auth' : ''].filter(Boolean).join('+');
+        return `  ${h.kind.padEnd(7)} ${h.name.padEnd(36)} ${h.enabled ? 'enabled ' : 'disabled'} ${head}${mid}${badges ? `  [${badges}]` : ''}`;
+      }),
+      r.hosts.length ? '' : '  (托管目录暂无 *.conf，可用看板「添加」或配置文件管理器创建)',
+    ].filter((l) => l !== '').join('\n'),
+  },
+  {
+    id: 'nginx.hostApply',
+    cli: ['nginx', 'host', 'apply'],
+    http: ['POST', '/api/nginx/hosts'],
+    summary: '看板保存：站点反代/端口转发表单 → 渲染 conf 落盘（备份→nginx -t→reload）',
+    flags: {
+      spec: { type: 'string' },
+      kind: { type: 'string' },
+      domains: { type: 'string' },
+      'listen-port': { type: 'number' },
+      upstream: { type: 'string' },
+      ws: { type: 'boolean' },
+      tls: { type: 'boolean' },
+      'cert-path': { type: 'string' },
+      'key-path': { type: 'string' },
+      name: { type: 'string' },
+      preview: { type: 'boolean' },
+    },
+    run: async (ctx) => {
+      // 面板/agent 直传 spec（HTTP body 是对象，CLI --spec 是 JSON 字符串）；CLI 也可以用拆开的 flag 拼
+      let spec = null;
+      if (ctx.spec !== undefined) {
+        if (typeof ctx.spec === 'object' && ctx.spec !== null) spec = ctx.spec;
+        else {
+          try { spec = JSON.parse(ctx.spec); } catch { throw badInput('spec 不是合法 JSON'); }
+        }
+      } else {
+        spec = {
+          kind: ctx.kind,
+          domains: ctx.domains !== undefined ? String(ctx.domains).split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+          listenPort: ctx['listen-port'],
+          upstream: ctx.upstream,
+          ws: ctx.ws,
+          tls: ctx.tls ? { certPath: ctx['cert-path'], keyPath: ctx['key-path'] } : null,
+        };
+      }
+      // 表单预览：只渲染不落盘（校验错误同样在此抛出，面板即时反馈）
+      if (ctx.preview) return { preview: renderHostConf(spec) };
+      return upsertHost(spec, ctx.name);
+    },
+    render: (r) => r.preview ?? `已生效: ${r.name}（${r.summary}；${r.created ? '新建' : '更新'}，nginx -t 通过 + graceful reload${r.backedUp ? `，已备份 ${r.backedUp}` : ''}）`,
+  },
+  {
+    id: 'nginx.hostRemove',
+    cli: ['nginx', 'host', 'remove'],
+    http: ['DELETE', '/api/nginx/hosts/:name'],
+    summary: '看板移除条目（= 删除对应配置文件；先备份，nginx -t 失败自动还原）',
+    args: ['name'],
+    run: (ctx) => removeHost(ctx.name),
+    render: (r) => `已删除: ${r.name}${r.backedUp ? `（备份 ${r.backedUp}，可还原）` : ''}`,
   },
   {
     id: 'nginx.rotateSecret',

@@ -1,4 +1,5 @@
-// 外部证书导入模块：仅做 PEM 解析、校验、配对验证、落盘、清理；nx-as 不签证书
+// 外部证书（并入 nginx 统一管理）：仅 PEM 解析、校验、配对验证、落盘、清理；nx-as 不签证书
+// 导入成功自动回填 store.nginx.certPath/keyPath——看板表单/网关入口直接可用，无需手抄路径
 import { X509Certificate, createPrivateKey, createPublicKey, createHash } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -146,6 +147,8 @@ export async function importCert({ certPem, keyPem }) {
         importedAt: Date.now(),
       },
     };
+    // 打通 cert→nginx 断点：自动回填托管配置的证书路径（原 UI 流程要用户手抄一遍）
+    s.nginx = { ...s.nginx, certPath, keyPath };
   });
 
   appendAudit({ action: 'cert.import', detail: { certPath, fingerprintSha256: info.fingerprintSha256 } }).catch(() => {});

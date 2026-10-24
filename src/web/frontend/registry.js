@@ -4,8 +4,6 @@
 
 export const VIEWS = {
   nginx: () => import('../../modules/nginx/view.jsx'),
-  gateway: () => import('../../modules/gateway/view.jsx'),
   auth: () => import('../../modules/auth/view.jsx'),
-  cert: () => import('../../modules/cert/view.jsx'),
   system: () => import('../../modules/system/view.jsx'),
 };

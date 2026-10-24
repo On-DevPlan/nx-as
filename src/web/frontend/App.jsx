@@ -1,7 +1,7 @@
 import React, { Suspense, lazy, useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { VIEWS } from './registry.js';
-import { api, setUnauthorizedHandler, getToken } from './api/client.js';
+import { api, setUnauthorizedHandler, apiBaseOf } from './api/client.js';
 import { Card, Row } from './components/ui.jsx';
 
 // 懒加载视图
@@ -33,52 +33,43 @@ class ErrorBoundary extends React.Component {
   }
 }
 
-function TokenGate({ children }) {
+// 跳 SSO 登录并携带回跳地址（站内相对路径）
+export function gotoLogin() {
+  const next = window.location.pathname + window.location.search;
+  location.href = `${apiBaseOf()}/oidc/login?next=${encodeURIComponent(next)}`;
+}
+
+// 鉴权门：SSO 会话探测。未登录不再输密钥——直接 302 去 go-ah 单点登录
+//（会话 cookie HttpOnly，浏览器同源自动携带；7 天有效，过期重新走一遍静默跳转）
+function AuthGate({ children, onIdentity }) {
   const [ok, setOk] = useState(null); // null = 检查中
-  const [input, setInput] = useState('');
   const [err, setErr] = useState('');
 
-  const check = async (token) => {
-    try {
-      const headers = token ? { Authorization: `Bearer ${token}` } : {};
-      // nginx 模式面板挂在 /_nxas/ 下时管理面 API 走前缀；direct/直连时不变
-      const base = window.location.pathname.startsWith('/_nxas') ? '/_nxas' : '';
-      const res = await fetch(base + '/api/auth/verify', { headers });
-      const data = await res.json();
-      if (data.valid) {
-        localStorage.setItem('nxas_token', token);
+  // 探测可重入：网络/服务暂不可达时给「重试」，不逼用户整页刷新（401 由 api() 整页接管）
+  const probe = () => {
+    setErr(''); setOk(null);
+    api('GET', '/api/auth/me')
+      .then((r) => {
+        onIdentity?.(r);
         setOk(true);
-      } else {
+      })
+      .catch((e) => {
+        setErr(String(e.message || e));
         setOk(false);
-        setErr(token ? '密钥不正确' : '请输入密钥（serve 启动时终端会打印，或 auth status 查看）');
-      }
-    } catch {
-      setOk(false);
-      setErr('无法连接服务');
-    }
+      });
   };
-
-  useEffect(() => {
-    // URL 带密钥（serve 启动打印的控制台链接 / 密钥短信发给自己）：优先并清掉参数
-    const url = new URL(location.href);
-    const urlToken = url.searchParams.get('token');
-    if (urlToken) {
-      url.searchParams.delete('token');
-      history.replaceState(null, '', url.pathname + url.search + url.hash);
-    }
-    check(urlToken || getToken());
-  }, []);
+  useEffect(() => { probe(); }, []);
 
   if (ok === null) return <div className="card">连接中...</div>;
   if (!ok) {
+    // 401 已由 api() 的 onUnauthorized 接管（跳登录）；这里兜底展示网络/服务错误
     return (
-      <Card title="密钥">
-        <Row label="密钥">
-          <input type="password" value={input} onChange={(e) => setInput(e.target.value)} placeholder="nxas_..." />
-        </Row>
-        {err && <Row label=""><span className="bad">{err}</span></Row>}
+      <Card title="无法确认登录状态">
+        <Row label=""><span className="bad">{err}</span></Row>
         <Row label="">
-          <button className="btn" onClick={() => check(input)}>验证</button>
+          <button className="btn" onClick={probe}>重试</button>
+          <button className="btn" onClick={gotoLogin}>去登录</button>
+          <span className="mid">服务器暂不可达（重启中）时点重试即可，无需整页刷新</span>
         </Row>
       </Card>
     );
@@ -89,10 +80,11 @@ function TokenGate({ children }) {
 function App() {
   const tabs = Object.keys(LAZY);
   const [active, setActive] = useState(tabs[0]);
+  const [me, setMe] = useState(null);
   const Active = LAZY[active];
 
   return (
-    <TokenGate>
+    <AuthGate onIdentity={setMe}>
       <header>
         <span className="brand"><img src="/logo-rounded.png" alt="" />nx-as</span>
         <nav>
@@ -102,6 +94,9 @@ function App() {
             </button>
           ))}
         </nav>
+        <span className="mid" style={{ marginLeft: 'auto', cursor: 'pointer' }} onClick={gotoLogin} title="点击重新登录 / 刷新身份">
+          {me?.email || me?.name || ''}
+        </span>
       </header>
       <main>
         <ErrorBoundary>
@@ -110,13 +105,13 @@ function App() {
           </Suspense>
         </ErrorBoundary>
       </main>
-    </TokenGate>
+    </AuthGate>
   );
 }
 
 setUnauthorizedHandler(() => {
-  localStorage.removeItem('nxas_token');
-  location.reload();
+  // 会话缺失/过期：整页跳 SSO 登录（go-ah 全局会话 30 天内通常是无感跳转）
+  gotoLogin();
 });
 
 createRoot(document.getElementById('root')).render(<App />);

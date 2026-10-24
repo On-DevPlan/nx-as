@@ -5,12 +5,12 @@
 // 备份 → nginx -t（失败还原）→ graceful reload），并打印本地 gost 客户端常驻命令。
 //
 // 用法（任意能访问 gost-as 面板端口的机器上）：
-//   node scripts/nxas-tunnel.mjs add <名称> <本地端口> [--public-port P] [--server URL] [--token TOK]
+//   node scripts/nxas-tunnel.mjs add <名称> <本地端口> [--public-port P] [--server URL] [--token 会话TOK]
 //   node scripts/nxas-tunnel.mjs remove <名称>
 //   node scripts/nxas-tunnel.mjs list
 //
 // 示例（发布本机 sql-harness http://127.0.0.1:7877 → 公网 http://47.x.x.x:7877）：
-//   node scripts/nxas-tunnel.mjs add sqlh 7877 --server http://47.110.80.47:8090/_nxas --token <管理密钥>
+//   node scripts/nxas-tunnel.mjs add sqlh 7877 --server http://47.110.80.47:8090/_nxas --token <SSO 会话 token>（或先 nx-as login --server <URL>）
 //   gost -L "rtcp://127.0.0.1:17877/127.0.0.1:7877" -F "relay://gost:<隧道密码>@47.110.80.47:8442"
 //
 // 端口约定：隧道 rtcp 监听 = 127.0.0.1:<10000+公网端口>（gost 服务端 loopback 绑定，公网不可直达，
@@ -26,7 +26,18 @@ for (let i = 1; i < args.length; i++) {
 }
 
 const SERVER = flags.server || process.env.NXAS_SERVER || 'http://127.0.0.1:8090/_nxas';
-const TOKEN = flags.token || process.env.NX_AS_TOKEN || '';
+let TOKEN = flags.token || process.env.NXAS_SESSION || '';
+if (!TOKEN) {
+  // 回落 credentials.json（nx-as login --server <同地址> 落盘的会话）
+  try {
+    const { readFileSync } = await import('node:fs');
+    const homedir = (await import('node:os')).homedir();
+    const dir = process.env.NX_AS_HOME || `${homedir}/.nx-as`;
+    const cred = JSON.parse(readFileSync(`${dir}/credentials.json`, 'utf8'));
+    const hit = cred.entries?.find((e) => (e.server || '').replace(/\/_nxas\/?$/, '') === SERVER.replace(/\/_nxas\/?$/, ''));
+    TOKEN = hit?.token || cred.entries?.at(-1)?.token || '';
+  } catch { /* 无凭据文件 */ }
+}
 const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,31}$/i;
 
 function die(msg) {
@@ -48,61 +59,6 @@ async function api(method, path, body) {
   return data;
 }
 
-function tunnelConf({ name, local, pub, apiPort }) {
-  const rtcpPort = 10000 + pub;
-  return `# nx-as gost-as 隧道: ${name}（本地 127.0.0.1:${local} → 公网 :${pub}）
-# 由 nxas-tunnel.mjs 生成；手改会被下次注册覆盖。删除请用 nxas-tunnel remove ${name}
-server {
-    listen ${pub};
-    server_name _;
-
-    # 登录/管理面（cookie 按 host 共享：任一端口登录，全部隧道端口放行）
-    location /_nxas/ {
-        proxy_pass http://127.0.0.1:${apiPort}/_nxas/;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-        proxy_buffering off;
-        proxy_read_timeout 1h;
-    }
-
-    # 委托鉴权端点（internal 只在 server 内生效，故每条隧道自带）
-    location = /_tunnel_auth_${pub} {
-        internal;
-        proxy_pass http://127.0.0.1:${apiPort}/_nxas/auth/check;
-        proxy_pass_request_body off;
-        proxy_set_header Content-Length "";
-        proxy_set_header Authorization $http_authorization;
-        proxy_set_header Cookie $http_cookie;
-        proxy_set_header X-Original-Uri $request_uri;
-        proxy_set_header X-Original-Method $request_method;
-        proxy_set_header X-Forwarded-For $remote_addr;
-    }
-
-    location @nxas_login_${pub} {
-        return 302 /_nxas/login?next=$request_uri;
-    }
-
-    # ── 隧道数据路径：鉴权后直代 gost rtcp（127.0.0.1:${rtcpPort}）──
-    location / {
-        auth_request /_tunnel_auth_${pub};
-        auth_request_set $nxas_device $upstream_http_x_device_id;
-        error_page 401 = @nxas_login_${pub};
-        proxy_pass http://127.0.0.1:${rtcpPort};
-        proxy_set_header Host $http_host;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_http_version 1.1;
-        proxy_set_header Connection $connection_upgrade;
-        proxy_buffering off;
-        proxy_read_timeout 1h;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        add_header X-Nxas-Device $nxas_device always;
-    }
-}
-`;
-}
-
 function gostCommand({ pub, local, serverUrl }) {
   const host = new URL(serverUrl.replace(/\/_nxas\/?$/, ''));
   const rtcpPort = 10000 + pub;
@@ -117,12 +73,11 @@ if (cmd === 'add') {
   const pub = flags['public-port'] ? Number(flags['public-port']) : local;
   if (!Number.isInteger(pub) || pub < 1 || pub > 65535) die('--public-port 必须是 1-65535');
   if (10000 + pub > 65535) die(`公网端口 ${pub} 过大（10000+pub 超出端口范围）`);
-  if (!TOKEN) die('缺少管理密钥：--token <TOK> 或环境变量 NX_AS_TOKEN');
+  if (!TOKEN) die('缺少会话凭据：--token <TOK>、环境变量 NXAS_SESSION，或先 nx-as login --server ' + SERVER);
 
-  const conf = tunnelConf({ name, local, pub, apiPort: process.env.NXAS_API_PORT || 7801 });
-  const file = `nxas-tunnel-${name}.conf`;
   try {
-    const r = await api('POST', `/api/nginx/files/${file}`, { content: conf });
+    // conf 由服务端单一模板渲染（nginx.tunnelApply）——本脚本不再嵌模板，防两端漂移
+    const r = await api('POST', '/api/nginx/tunnel', { name, 'public-port': pub });
     console.log(`✅ 隧道已注册并生效: ${name}（${r.created ? '新建' : '更新'}，nginx -t 通过 + reload，备份 ${r.backedUp || '无'}）`);
   } catch (e) {
     die(`注册失败: ${e.message}`);
@@ -134,15 +89,15 @@ if (cmd === 'add') {
 } else if (cmd === 'remove') {
   const [name] = pos;
   if (!name || !NAME_RE.test(name)) die('用法: nxas-tunnel remove <名称>');
-  if (!TOKEN) die('缺少管理密钥：--token <TOK> 或环境变量 NX_AS_TOKEN');
+  if (!TOKEN) die('缺少会话凭据：--token <TOK>、环境变量 NXAS_SESSION，或先 nx-as login --server ' + SERVER);
   try {
-    const r = await api('DELETE', `/api/nginx/files/nxas-tunnel-${name}.conf`);
+    const r = await api('POST', '/api/nginx/tunnel/remove', { name });
     console.log(`✅ 已删除并生效: nxas-tunnel-${name}.conf${r.backedUp ? `（备份 ${r.backedUp}，可还原）` : ''}`);
   } catch (e) {
     die(`删除失败: ${e.message}`);
   }
 } else if (cmd === 'list') {
-  if (!TOKEN) die('缺少管理密钥：--token <TOK> 或环境变量 NX_AS_TOKEN');
+  if (!TOKEN) die('缺少会话凭据：--token <TOK>、环境变量 NXAS_SESSION，或先 nx-as login --server ' + SERVER);
   try {
     const r = await api('GET', '/api/nginx/files');
     const tunnels = r.files.filter((f) => f.name.startsWith('nxas-tunnel-'));

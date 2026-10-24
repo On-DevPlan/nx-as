@@ -1,6 +1,6 @@
 // HTTP 路由：由 action.http 编译，与 CLI 同源
 // 鉴权中间件在这里做（所有 action 之前）；SSE action 特殊放行
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { requireSession } from './session.js';
 
 let compiled = null;
 
@@ -25,37 +25,18 @@ function requireSpec() {
 }
 
 const PUBLIC_PATHS = [
-  ['GET', '/api/auth/verify'], // App 验证密钥用；无 token 也能探活
+  ['GET', '/api/auth/verify'],  // 存活探针（entrypoint 就绪探测 / client doctor）
+  ['GET', '/api/bootstrap'],    // 端口协商探测签名（serve-port.js 认领「是不是自己」；内容无敏感字段）
 ];
 
 function isPublic(action) {
   return PUBLIC_PATHS.some(([m, p]) => action.http[0] === m && action.http[1] === p);
 }
 
-// token 来源优先级：serve 启动参数/环境变量（存 runtimeState）> store 里的
-let runtimeToken = null;
-export function setRuntimeToken(token) {
-  runtimeToken = token;
-}
-
-export function currentToken() {
-  return runtimeToken;
-}
-
-// 恒定时间比较（先哈希对齐长度，防时序侧信道；任意输入等价耗时）
-export function safeEqual(a, b) {
-  const ha = createHash('sha256').update(String(a)).digest();
-  const hb = createHash('sha256').update(String(b)).digest();
-  return timingSafeEqual(ha, hb);
-}
-
+// 鉴权：统一会话（OIDC SSO 登录签发）——Bearer 头（CLI/脚本）或 cookie（浏览器）。
+// 静态管理密钥方案已废除：不再有 runtime token / store 密钥可比对。
 async function authorized(req) {
-  const auth = req.headers.authorization || '';
-  if (runtimeToken) return safeEqual(auth, `Bearer ${runtimeToken}`);
-  // serve 之前（单测直接调 handleApi）回落到 store
-  const { ensureToken } = await import('../modules/auth/service.js');
-  const token = await ensureToken(null);
-  return safeEqual(auth, `Bearer ${token}`);
+  return Boolean(await requireSession(req));
 }
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
@@ -100,7 +81,7 @@ export async function handleApi(req, res, url) {
   // 鉴权（在所有 action 之前；公开路径除外）
   if (!isPublic(hit.action)) {
     if (!(await authorized(req))) {
-      return sendJson(res, 401, { ok: false, error: '密钥缺失或错误', code: 'UNAUTHORIZED' });
+      return sendJson(res, 401, { ok: false, error: '未登录或会话已过期（访问 /oidc/login 走 go-ah 单点登录）', code: 'UNAUTHORIZED' });
     }
   }
 
@@ -115,9 +96,8 @@ export async function handleApi(req, res, url) {
   hit.keys.forEach((k, i) => {
     raw[k] = decodeURIComponent(m[i + 1]);
   });
-  // Bearer 密钥注入 ctx（auth.verify 等公开路径靠它自证）
-  const bearer = (req.headers.authorization || '').match(/^Bearer (.+)$/);
-  if (bearer) raw.token = bearer[1];
+  // 会话身份注入 ctx（auth.me 等 action 用；公开路径无会话则为 null）
+  raw.session = isPublic(hit.action) ? null : await requireSession(req);
   if (method === 'GET' || method === 'HEAD') {
     for (const [k, v] of url.searchParams) raw[k] = v;
   } else {

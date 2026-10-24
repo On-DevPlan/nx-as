@@ -7,9 +7,11 @@ import http from 'node:http';
 // /_next/* 与直跑根路径完全一致）。
 //
 //   /_nxas/auth/check        nginx auth_request 委托端点
-//   /_nxas/auth/login  POST  登录换会话 cookie
-//   /_nxas/login   GET      登录页（?next= 回跳）
-//   /_nxas/api/*             nx-as 管理面 API（设备/nginx/证书/设置）
+//   /_nxas/oidc/login  GET   SSO 登录跳板（302 → go-ah）
+//   /_nxas/oidc/callback GET SSO 回调（code 换会话）
+//   /_nxas/auth/logout GET   登出（清会话 cookie）
+//   /_nxas/login   GET      登录跳板旧路径（?next= 回跳；error_page 兼容）
+//   /_nxas/api/*             nx-as 管理面 API（SSO 会话鉴权）
 //   /_nxas/panel*            管理面板 SPA
 //   /_nxas/m/v1/*            手机 API（ticket、sessions、agent…）
 //
@@ -42,21 +44,29 @@ export function startServer({ port = 7801, host = '127.0.0.1' } = {}) {
         const { handleAuthCheck } = await import('./gateway/check.js');
         return await handleAuthCheck(req, res, innerUrl);
       }
-      // ── 登录（POST 换 cookie / GET 登录页）──
-      if (inner === '/auth/login' && req.method === 'POST') {
-        const { handleLogin } = await import('./gateway/session.js');
-        return await handleLogin(req, res);
+      // ── SSO 登录链路（go-ah 单点登录；/login 旧路径保留兼容 nginx error_page）──
+      if (inner === '/oidc/login' && req.method === 'GET') {
+        const { handleOidcLogin } = await import('./session.js');
+        return await handleOidcLogin(req, res, innerUrl, nginxMode);
+      }
+      if (inner === '/oidc/callback' && req.method === 'GET') {
+        const { handleOidcCallback } = await import('./session.js');
+        return await handleOidcCallback(req, res, innerUrl, nginxMode ? '/_nxas' : '');
+      }
+      if (inner === '/auth/logout' && req.method === 'GET') {
+        const { handleLogout } = await import('./session.js');
+        return await handleLogout(req, res);
       }
       if (inner === '/login' && req.method === 'GET') {
-        const { handleLoginPage } = await import('./gateway/session.js');
-        return await handleLoginPage(req, res, innerUrl.searchParams.get('next') || '/');
+        const { handleLoginPage } = await import('./session.js');
+        return await handleLoginPage(req, res, innerUrl.searchParams.get('next') || '/', nginxMode ? '/_nxas' : '');
       }
       // ── 管理面 API ──
       if (inner.startsWith('/api/')) {
         const { handleApi } = await import('./api.js');
         return await handleApi(req, res, innerUrl);
       }
-      // ── 管理面板 SPA（面板自身有 TokenGate 管理密钥保护）──
+      // ── 管理面板 SPA（SSO 会话鉴权）──
       if (inner === '/panel' || inner.startsWith('/panel/')) {
         const { serveStatic } = await import('./api.js');
         return await serveStatic(inner === '/panel' ? '/' : inner.slice('/panel'.length), res, req);

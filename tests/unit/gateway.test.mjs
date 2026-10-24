@@ -1,115 +1,118 @@
-// gateway 鉴权单测：device token / 短票 / 节流
+// 网关鉴权单测：统一会话（SSO）/ 短票 / 节流
+// device token 已废除——会话原语在 runtime/session.js（cookie 与 Bearer 双载体）
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const imp = (p) => import(pathToFileURL(join(ROOT, p)).href);
 
-process.env.NX_AS_STORE = join(ROOT, '.tool', 'test-store', 'gateway-unit.json');
+const TMP = await mkdtemp(join(tmpdir(), 'gateway-unit-'));
+process.env.NX_AS_STORE = join(TMP, 'store.json');
 
-const svc = await imp('src/modules/gateway/service.js');
 const { issueTicket, resolveTicket, verifyTicket, __resetTicketsForTest } =
   await imp('src/runtime/gateway/tickets.js');
 const { ticketFromUri, decide } = await imp('src/runtime/gateway/check.js');
 const { retryAfterMs, recordFailure, backoffDelayMs, resetThrottle } = await imp('src/runtime/gateway/throttle.js');
 const { resetStoreCache } = await imp('src/core/store.js');
-const session = await imp('src/runtime/gateway/session.js');
+const session = await imp('src/runtime/session.js');
 
-// ---------- device token ----------
+const IDENTITY = { sub: '42', email: 'user@example.com', name: 'Test User' };
 
-test('device token: 签发→校验→吊销→再校验失败', async () => {
+// ---------- 统一会话（SSO 签发） ----------
+
+test('会话: 签发→校验→篡改拒绝→过期拒绝', async () => {
   resetStoreCache();
-  const { token, device } = await svc.issueToken({ name: 'unit-phone' });
-  assert.match(token, /^nxas_d1\.dev_[a-z0-9]+\.[0-9a-f]{64}$/, 'token 格式');
-  assert.ok(device.id.startsWith('dev_'));
+  const { value, maxAgeSec } = await session.issueSessionCookie(IDENTITY);
+  assert.match(value, /^nxas_s2\.[A-Za-z0-9_-]+\.[0-9a-f]{64}$/, '会话 token 格式');
+  assert.equal(maxAgeSec, 7 * 24 * 3600, '7 天');
 
-  // 正确 token 通过
-  const dev = await svc.verifyDeviceToken(`Bearer ${token}`);
-  assert.equal(dev?.id, device.id);
-  assert.equal(dev?.name, 'unit-phone');
+  const identity = await session.verifySessionToken(value);
+  assert.deepEqual(identity, IDENTITY);
 
-  // 篡改 secret 拒绝
-  const tampered = token.slice(0, -1) + (token.endsWith('a') ? 'b' : 'a');
-  assert.equal(await svc.verifyDeviceToken(`Bearer ${tampered}`), null);
+  // 篡改签名段拒绝
+  const tampered = value.slice(0, -1) + (value.endsWith('a') ? 'b' : 'a');
+  assert.equal(await session.verifySessionToken(tampered), null);
 
   // 格式错误拒绝
-  assert.equal(await svc.verifyDeviceToken('Bearer nonsense'), null);
-  assert.equal(await svc.verifyDeviceToken(null), null);
+  assert.equal(await session.verifySessionToken('Bearer nonsense'), null);
+  assert.equal(await session.verifySessionToken(null), null);
+  assert.equal(await session.verifySessionToken('nxas_s1.dead.beef'), null, '旧格式不认');
 
-  // 吊销后拒绝
-  await svc.revokeDevice({ id: device.id });
-  assert.equal(await svc.verifyDeviceToken(`Bearer ${token}`), null, '吊销后立即 401 语义');
-  const again = await svc.revokeDevice({ id: device.id });
-  assert.equal(again.status, 'already_revoked');
+  // 过期拒绝（伪造 payload：HMAC 过不了；构造已过期 token 需要密钥——用密钥直签验证语义）
+  const { ensureSessionSecret } = await imp('src/modules/auth/service.js');
+  const { createHmac } = await import('node:crypto');
+  const secret = await ensureSessionSecret();
+  const expiredPayload = 'nxas_s2.' + Buffer.from(JSON.stringify({ ...IDENTITY, exp: 1 })).toString('base64url');
+  const expired = `${expiredPayload}.${createHmac('sha256', secret).update(expiredPayload).digest('hex')}`;
+  assert.equal(await session.verifySessionToken(expired), null, '过期 token 拒绝');
 });
 
-test('device token: 未知名/超长名拒绝', async () => {
-  await assert.rejects(() => svc.issueToken({}), (e) => e.code === 'INVALID_INPUT');
-  await assert.rejects(() => svc.issueToken({ name: 'x'.repeat(65) }), (e) => e.code === 'INVALID_INPUT');
-});
-
-test('device token: scope 落字段（admin/client，非法值拒绝，缺省 admin 向后兼容）', async () => {
+test('会话: requireSession 双载体（Bearer 头优先，其次 cookie）', async () => {
   resetStoreCache();
-  const { device: client } = await svc.issueToken({ name: 'client-dev', scope: 'client' });
-  const { device: def } = await svc.issueToken({ name: 'default-dev' });
-  await assert.rejects(() => svc.issueToken({ name: 'x', scope: 'root' }), (e) => e.code === 'INVALID_INPUT');
-  const list = await svc.listDevices();
-  assert.equal(list.find((d) => d.id === client.id).scope, 'client');
-  assert.equal(list.find((d) => d.id === def.id).scope, 'admin', '缺省 admin');
+  const { value } = await session.issueSessionCookie(IDENTITY);
+  const bearerReq = { headers: { authorization: `Bearer ${value}` } };
+  assert.deepEqual(await session.requireSession(bearerReq), IDENTITY);
+  const cookieReq = { headers: { cookie: `nxas_session=${encodeURIComponent(value)}` } };
+  assert.deepEqual(await session.requireSession(cookieReq), IDENTITY);
+  assert.equal(await session.requireSession({ headers: {} }), null);
+  // 非会话格式的 Bearer 不认
+  assert.equal(await session.requireSession({ headers: { authorization: 'Bearer garbage' } }), null);
 });
 
-test('device token: 校验通过记录最近使用 IP/UA', async () => {
+test('会话: rotate 后旧会话全失效（密钥轮换语义）', async () => {
   resetStoreCache();
-  const { token, device } = await svc.issueToken({ name: 'meta-dev' });
-  resetStoreCache();
-  await svc.verifyDeviceToken(`Bearer ${token}`, { ip: '203.0.113.9', ua: 'Mozilla/5.0 TestUA' });
-  const list = await svc.listDevices();
-  const d = list.find((x) => x.id === device.id);
-  assert.equal(d.lastIp, '203.0.113.9');
-  assert.equal(d.lastUa, 'Mozilla/5.0 TestUA');
+  const { value } = await session.issueSessionCookie(IDENTITY);
+  assert.ok(await session.verifySessionToken(value), '前置：有效');
+  const auth = await imp('src/modules/auth/service.js');
+  await auth.rotateSessionSecret();
+  assert.equal(await session.verifySessionToken(value), null, 'rotate 后旧会话拒绝');
 });
 
-test('device token: revoke-all 全部吊销（含应急语义）', async () => {
-  resetStoreCache();
-  await svc.issueToken({ name: 'ra-1' });
-  await svc.issueToken({ name: 'ra-2', scope: 'client' });
-  const before = (await svc.listDevices()).filter((d) => !d.revoked).length;
-  assert.ok(before >= 2, '测试前置：至少 2 台活跃');
-  const r = await svc.revokeAllDevices();
-  assert.equal(r.revoked, before, '吊销数 = 吊销前活跃数');
-  const list = await svc.listDevices();
-  assert.ok(list.every((d) => d.revoked), '全部 revoked');
-  const again = await svc.revokeAllDevices();
-  assert.equal(again.revoked, 0, '重复调用幂等');
-});
+// ---------- 决策核心 decide ----------
 
-test('会话回查：吊销设备后其已发会话立即失效（decide 拒绝）', async () => {
+test('decide: 会话 cookie 放行；无凭据静默拒绝不计数', async () => {
   resetStoreCache();
   resetThrottle();
-  const { device } = await svc.issueToken({ name: 'sess-revoke' });
-  const { value } = session.issueSessionCookie(device.id);
-  const cookieHeader = `nxas_session=${encodeURIComponent(value)}`;
-
-  // 未吊销：会话放行
-  const allow = await decide({ cookieHeader, ip: '198.51.100.7' });
+  const { value } = await session.issueSessionCookie(IDENTITY);
+  const allow = await decide({ cookieHeader: `nxas_session=${encodeURIComponent(value)}`, ip: '198.51.100.7' });
   assert.equal(allow.decision, 'allow');
-  assert.equal(allow.device.id, device.id);
+  assert.equal(allow.session.sub, '42');
 
-  // 吊销后：同一 cookie 立即拒绝（无凭据 → 静默 deny-auth）
-  await svc.revokeDevice({ id: device.id });
-  const deny = await decide({ cookieHeader, ip: '198.51.100.7' });
+  const deny = await decide({ ip: '198.51.100.7' });
   assert.equal(deny.decision, 'deny-auth');
+  assert.equal(deny.retryAfterSec, 0, '无凭据不计节流');
+});
 
-  // isDeviceAlive 直查语义
-  assert.equal(await svc.isDeviceAlive(device.id), false);
-  assert.equal(await svc.isDeviceAlive('dev_unknown'), false);
+test('decide: 会话 Bearer 放行；坏 Bearer 记节流（ip 桶）', async () => {
+  resetStoreCache();
+  resetThrottle();
+  const { value } = await session.issueSessionCookie(IDENTITY);
+  const allow = await decide({ authorization: `Bearer ${value}`, ip: '198.51.100.8' });
+  assert.equal(allow.decision, 'allow');
+
+  const bad = await decide({ authorization: 'Bearer nxas_s2.fake.sig', ip: '198.51.100.9' });
+  assert.equal(bad.decision, 'deny-auth');
+  assert.ok(retryAfterMs('ip:198.51.100.9') > 0, '坏凭据进入节流桶');
+  resetThrottle();
+});
+
+test('decide: 认证后按 sub 节流（tok:<sub>）', async () => {
+  resetStoreCache();
+  resetThrottle();
+  const { value } = await session.issueSessionCookie(IDENTITY);
+  recordFailure('tok:42', Date.now());
+  const blocked = await decide({ authorization: `Bearer ${value}`, ip: '198.51.100.10' });
+  assert.equal(blocked.decision, 'throttled', 'tok 桶封锁期内即使会话有效也 429 语义');
+  resetThrottle();
 });
 
 // ---------- SSE 短票 ----------
 
-test('短票: 有效一次、过期拒、篡改拒、格式拒', async () => {
+test('短票: 有效一次、篡改拒、格式拒', async () => {
   __resetTicketsForTest();
   const t = issueTicket('sess-abc');
   assert.match(t, /^t1\.sess-abc\.\d+\.[0-9a-f]{32}\.[0-9a-f]{64}$/);
@@ -120,7 +123,6 @@ test('短票: 有效一次、过期拒、篡改拒、格式拒', async () => {
   const tampered = t.slice(0, -1) + (t.endsWith('a') ? 'b' : 'a');
   assert.equal(verifyTicket(tampered), false);
 
-  // 过期（构造已过期的时间戳 + 真签名不可行——密钥在模块内；用格式错误代替过期语义）
   assert.equal(verifyTicket('t1.123.abc'), false);
   assert.equal(verifyTicket(undefined), false);
   assert.equal(verifyTicket(''), false);
@@ -193,9 +195,9 @@ test('节流: 不同键互不影响', () => {
   resetThrottle();
   recordFailure('ip:a', 1000);
   assert.equal(retryAfterMs('ip:b', 1000), 0, '别的 IP 不连坐');
-  recordFailure('tok:dev1', 1000);
-  assert.ok(retryAfterMs('tok:dev1', 1000) > 0);
-  assert.equal(retryAfterMs('tok:dev2', 1000), 0, '别的设备不连坐');
+  recordFailure('tok:u1', 1000);
+  assert.ok(retryAfterMs('tok:u1', 1000) > 0);
+  assert.equal(retryAfterMs('tok:u2', 1000), 0, '别的用户不连坐');
 });
 
 test('节流: 洪泛超上限只淘汰最旧条目，不整表解封（近期键仍封锁）', () => {
@@ -207,4 +209,3 @@ test('节流: 洪泛超上限只淘汰最旧条目，不整表解封（近期键
   // 近期条目仍在封锁（没有被整表 clear）
   assert.ok(retryAfterMs(`ip:flood${N - 1}`, 1000) > 0, '最近键仍封锁，未全局解封');
 });
-

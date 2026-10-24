@@ -19,7 +19,10 @@ export function flagSpecsOf(action) {
 
 // CLI 命令路径匹配用：'skill install --list' 是一条命令路径而非 flag
 export function commandTokenOf(action) {
-  return cliPathsOf(action)[0].join(' ');
+  const first = cliPathsOf(action)[0];
+  // http-only action（cli:null，面板专用）：命令表里以 HTTP 路由签名展示
+  if (!first) return (action.http ? `${action.http[0]} ${action.http[1]}` : action.id);
+  return first.join(' ');
 }
 
 // ---------- 路由编译 ----------
@@ -98,7 +101,9 @@ export function applySpec(action, raw) {
 }
 
 export function usageOf(action, binName = 'nx-as') {
-  const parts = [binName, ...cliPathsOf(action)[0]];
+  const paths = cliPathsOf(action);
+  if (!paths[0]) return commandTokenOf(action); // http-only：无 CLI 用法串
+  const parts = [binName, ...paths[0]];
   for (const a of argSpecsOf(action)) {
     // 命令路径里已含参数名（如 cli: ['task','get','id'] 声明了位置参数占位）时不重复
     if (cliPathsOf(action)[0].includes(a.name)) continue;

@@ -39,7 +39,7 @@ RUN npm install -g @agegr/pi-web@0.9.3 --no-audit --no-fund
 # ── Stage 2: runtime 公共层（nginx + nx-as）────────────────────────────
 FROM node:22-alpine AS runtime-common
 
-RUN apk add --no-cache nginx openssl tini gettext \
+RUN apk add --no-cache nginx nginx-mod-stream openssl tini gettext \
     && mkdir -p /run/nginx /etc/nginx/ssl /etc/nginx/http.d /data
 
 # nx-as 产物（src + 已 prune 的 node_modules + bin + 面板 public + package.json）
@@ -109,8 +109,13 @@ RUN apk add --no-cache tar \
 FROM runtime-common AS gost
 COPY --from=gost-bin /usr/local/bin/gost /usr/local/bin/gost
 COPY docker/gost-init.mjs /app/docker/gost-init.mjs
+COPY docker/bind-audit.mjs docker/bind-audit-conf.js /app/docker/
 COPY docker/entrypoint-gost.sh /entrypoint-gost.sh
 COPY docker/gost-nginx.conf.template /etc/nginx/http.d/gost-as.conf.template
+# 模板刷新源（entrypoint 每次启动从这里覆盖 http.d 里的模板——http.d 已符号链接到数据卷，
+# 模板不持久化，旧镜像的模板才不会盖掉新镜像的修复）
+COPY docker/nginx.conf.template /app/nginx-templates/nx-as.conf.template
+COPY docker/gost-nginx.conf.template /app/nginx-templates/gost-as.conf.template
 # host 网络形态：alpine nginx 自带的 default.conf（listen 80 default_server）
 # 会与宿主 80 端口冲突（gost-as 下 80 属宿主其它应用）——直接移除
 RUN rm -f /etc/nginx/http.d/default.conf \

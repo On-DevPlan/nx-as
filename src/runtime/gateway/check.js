@@ -1,10 +1,12 @@
 // 鉴权决策核心：direct 模式的中间件链与 nginx 模式的 /auth/check 委托端点共用这一份逻辑
 //
-// 决策输入：Authorization 头（device token）/ ticket（query 或头里的 X-Original-Uri）
-// 决策输出：{ decision: 'allow', device } | { decision: 'deny-auth', retryAfterSec }
+// 决策输入：Authorization 头（会话 Bearer）/ 会话 cookie / ticket（query 或头里的 X-Original-Uri）
+// 决策输出：{ decision: 'allow', session } | { decision: 'deny-auth', retryAfterSec }
 //          | { decision: 'throttled', retryAfterSec }
 // 节流键：认证前 ip:*、认证后 tok:*（与 direct 模式同语义）
-import { verifyDeviceToken } from '../../modules/gateway/service.js';
+//
+// device token 已废除：人的凭据唯一来源是 go-ah SSO 登录签发的统一会话
+// （格式 nxas_s2.*；浏览器 cookie 与 CLI Bearer 同一凭据，校验在 runtime/session.js）
 import { appendAudit } from '../../core/audit.js';
 import { resolveTicket } from './tickets.js';
 import { retryAfterMs, recordFailure } from './throttle.js';
@@ -33,7 +35,7 @@ export function ticketFromUri(rawUri) {
  * 纯决策函数（无 HTTP 语义）。
  * @param {{authorization?: string, cookieHeader?: string, rawUri?: string, ip?: string, userAgent?: string}} input
  */
-export async function decide({ authorization, cookieHeader, rawUri, ip = 'unknown', userAgent = '' }) {
+export async function decide({ authorization, cookieHeader, rawUri, ip = 'unknown', userAgent: _userAgent = '' }) {
   // 节流前置查询（认证前按 IP）
   const ipBlock = retryAfterMs(`ip:${ip}`);
   if (ipBlock > 0) {
@@ -43,38 +45,30 @@ export async function decide({ authorization, cookieHeader, rawUri, ip = 'unknow
   // SSE 事件流短票（EventSource 无 header 场景）。票与会话绑定：只能用在自己签发的那个会话上
   const t = ticketFromUri(rawUri);
   if (t && t.ticket && resolveTicket(t.ticket, t.sessionId)) {
-    return { decision: 'allow', device: { id: 'ticket', name: 'sse-ticket', ticket: true } };
+    return { decision: 'allow', session: { sub: 'ticket', name: 'sse-ticket', ticket: true } };
   }
 
-  // 登录会话 cookie（浏览器场景：登录一次，同源请求自动携带）。
-  // 回查设备有效性：吊销设备后其已发会话立即失效（cookie 本身是无状态 HMAC，靠这条锁死）。
-  const { sessionFromCookieHeader, verifySessionCookie } = await import('./session.js');
-  const { isDeviceAlive } = await import('../../modules/gateway/service.js');
-  const sessionDeviceId = verifySessionCookie(sessionFromCookieHeader(cookieHeader));
-  if (sessionDeviceId && (await isDeviceAlive(sessionDeviceId))) {
-    return { decision: 'allow', device: { id: sessionDeviceId, name: 'session' } };
-  }
-
-  // device token（校验通过时记录最近使用 IP/UA，与 lastUsedAt 同用 60s 节流写）
-  const device = await verifyDeviceToken(authorization, { ip, ua: userAgent });
-  if (!device) {
-    // 有凭据但凭据错误 → 记节流；完全无凭据（未登录浏览）→ 静默拒绝不计数
-    // （页面加载几十个资源在登录前全部 401，若计数会把正常用户锁死）
-    if (authorization) {
-      const delay = recordFailure(`ip:${ip}`);
-      appendAudit({ action: 'gw.auth_fail', detail: { ip, path: rawUri } }).catch(() => {});
-      return { decision: 'deny-auth', retryAfterSec: Math.max(1, Math.ceil(delay / 1000)) };
+  // 统一会话（浏览器 cookie 或 CLI Bearer；无状态 HMAC——全端下线走 auth rotate）
+  const { requireSession } = await import('../session.js');
+  const req = { headers: { authorization, cookie: cookieHeader } };
+  const session = await requireSession(req);
+  if (session) {
+    // 认证后按 sub 查询（失效重放按用户封锁）
+    const tokBlock = retryAfterMs(`tok:${session.sub}`);
+    if (tokBlock > 0) {
+      return { decision: 'throttled', retryAfterSec: Math.max(1, Math.ceil(tokBlock / 1000)) };
     }
-    return { decision: 'deny-auth', retryAfterSec: 0 };
+    return { decision: 'allow', session };
   }
 
-  // 认证后按 tokenId 查询（失效重放按设备封锁）
-  const devBlock = retryAfterMs(`tok:${device.id}`);
-  if (devBlock > 0) {
-    return { decision: 'throttled', retryAfterSec: Math.max(1, Math.ceil(devBlock / 1000)) };
+  // 有凭据但凭据错误 → 记节流；完全无凭据（未登录浏览）→ 静默拒绝不计数
+  // （页面加载几十个资源在登录前全部 401，若计数会把正常用户锁死）
+  if (authorization) {
+    const delay = recordFailure(`ip:${ip}`);
+    appendAudit({ action: 'gw.auth_fail', detail: { ip, path: rawUri } }).catch(() => {});
+    return { decision: 'deny-auth', retryAfterSec: Math.max(1, Math.ceil(delay / 1000)) };
   }
-
-  return { decision: 'allow', device };
+  return { decision: 'deny-auth', retryAfterSec: 0 };
 }
 
 // ---------- /auth/check 委托端点（nginx auth_request 目标；仅 loopback 语义） ----------
@@ -93,13 +87,13 @@ export async function handleAuthCheck(req, res, url) {
   });
   if (r.decision === 'allow') {
     // X-Auth-Cred: ticket 让上游反代知道该用哪套凭据（短票不注入机机密码）
-    res.writeHead(204, { 'X-Device-Id': r.device.id, 'X-Auth-Cred': r.device.ticket ? 'ticket' : 'machine' });
+    res.writeHead(204, { 'X-Device-Id': r.session.sub, 'X-Auth-Cred': r.session.ticket ? 'ticket' : 'machine' });
     res.end();
     return;
   }
   if (r.decision === 'deny-auth') {
     // auth_request 契约只接受 2xx/401/403（302 会变 500）；浏览器跳登录由
-    // nginx 侧 error_page 401 => @nxas_login 完成（模板负责）
+    // nginx 侧 error_page 401 => @nxas_login 完成（模板负责；/login 现在是 SSO 跳板）
     res.writeHead(401, { 'Retry-After': String(r.retryAfterSec) });
     res.end();
     return;

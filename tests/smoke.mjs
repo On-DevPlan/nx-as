@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// 端到端 smoke：起 serve（随机端口 + 临时 store）→ 管理面鉴权 → prompts CRUD → 静态页
-// 网关流程（/m/v1 反代、设备 token）在 tests/unit/gateway.test.mjs 单测 + 本文件第 7 节
+// 端到端 smoke：起 serve（随机端口 + 临时 store + 假 IdP）→ SSO 登录 → 会话鉴权 → 短票 → 静态页
+// OIDC 细粒度用例（state 重放/错 verifier/白名单/CLI handoff）在 tests/unit/oidc.test.mjs
 import { spawn } from 'node:child_process';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -9,14 +9,20 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 const ROOT = join(new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 const BIN = join(ROOT, 'bin', 'nx-as.mjs');
-// 7900-7989：避开常用本机服务端口段（7877 上若有真实服务，探活 JSON 校验也能兜底）
+// 7900-7989：避开常用本机服务端口段
 const PORT = 7900 + Math.floor(Math.random() * 90);
 const BASE = `http://127.0.0.1:${PORT}`;
-const TOKEN = 'smoketoken';
 
-process.env.NX_AS_STORE = join(await mkdtemp(join(tmpdir(), 'nxas-smoke-')), 'store.json');
-process.env.NX_AS_TOKEN = TOKEN;
+const TMP = await mkdtemp(join(tmpdir(), 'nxas-smoke-'));
+process.env.NX_AS_STORE = join(TMP, 'store.json');
 delete process.env.NX_AS_HOME;
+delete process.env.NXAS_GW_MODE;
+delete process.env.NXAS_BOOTSTRAP;
+
+const { startFakeIdp } = await import(new URL('./helpers/fake-idp.mjs', import.meta.url).href);
+const idp = await startFakeIdp({ clients: { 'nx-as': ['http://127.0.0.1:*/oidc/callback'] } });
+process.env.NXAS_OIDC_ISSUER = idp.issuer;
+process.env.NXAS_OIDC_CLIENT_ID = 'nx-as';
 
 let passed = 0;
 let failed = 0;
@@ -30,17 +36,28 @@ function ok(cond, name) {
   }
 }
 
-async function req(method, path, body, token = TOKEN) {
-  const headers = {};
-  if (token) headers.Authorization = `Bearer ${token}`;
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
+// 极简 cookie jar
+const jar = new Map();
+const jarHeader = () => [...jar.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
+function absorb(res) {
+  for (const c of res.headers.getSetCookie?.() || []) {
+    const [pair] = c.split(';');
+    const eq = pair.indexOf('=');
+    if (eq > 0) jar.set(pair.slice(0, eq).trim(), pair.slice(eq + 1).trim());
+  }
+}
+
+async function req(method, path, body, headers = {}) {
+  const h = { cookie: jarHeader(), ...headers };
+  if (body !== undefined) h['Content-Type'] = 'application/json';
   const res = await fetch(BASE + path, {
     method,
-    headers,
+    headers: h,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
+  absorb(res);
   const data = await res.json().catch(() => null);
-  return { status: res.status, data };
+  return { status: res.status, data, res };
 }
 
 // 1. 起服务
@@ -61,8 +78,7 @@ server.on('exit', (code) => {
 let up = false;
 for (let i = 0; i < 40; i++) {
   try {
-    // 探活必须是 nx-as 自己的应答（带 version 的 JSON）——端口撞上别的本机服务时
-    // （HTTP 状态码五花八门但都不是 nx-as），继续重试而不是误判就绪
+    // 探活必须是 nx-as 自己的应答（带 version 的 JSON）——端口撞上别的本机服务时继续重试
     const r = await fetch(`${BASE}/api/auth/verify`);
     if (r.status < 500) {
       const j = await r.json().catch(() => null);
@@ -76,56 +92,62 @@ if (!up) {
   server.kill();
   process.exit(1);
 }
-console.log(`smoke: serve 就绪 :${PORT}`);
+console.log(`smoke: serve 就绪 :${PORT}（IdP :${idp.port}）`);
 
 try {
-  // 2. 管理面鉴权
-  const anon = await req('GET', '/api/devices', undefined, null);
-  ok(anon.status === 401, '无密钥 → 401');
-  const bad = await req('GET', '/api/devices', undefined, 'wrong');
-  ok(bad.status === 401, '错误密钥 → 401');
-  const verify = await req('GET', '/api/auth/verify', undefined, TOKEN);
-  ok(verify.data?.valid === true, 'verify 带 correct token → valid:true');
-  const verifyBad = await req('GET', '/api/auth/verify', undefined, 'wrong');
-  ok(verifyBad.data?.valid === false, 'verify 带错误 token → valid:false');
+  // 2. 公开探针与匿名鉴权边界
+  const verify = await req('GET', '/api/auth/verify');
+  ok(verify.data?.valid === true, 'verify 公开探针 valid:true');
+  const bootAnon = await req('GET', '/api/bootstrap');
+  ok(bootAnon.status === 200 && Array.isArray(bootAnon.data?.commands), 'bootstrap 公开（端口协商签名）');
+  const anon = await req('GET', '/api/auth/status');
+  ok(anon.status === 401, '未登录管理面 → 401');
 
-  // 3. 设备管理（模型/Bearer 配置已移交 pi-web 自带设置页）
-  const devices = await req('GET', '/api/devices');
-  ok(devices.status === 200 && Array.isArray(devices.data), 'device list');
+  // 3. SSO 登录（fake IdP 登录+consent 折叠为 authorize 直接发码）
+  const loginRes = await fetch(`${BASE}/oidc/login?next=/panel`, { redirect: 'manual', headers: { cookie: jarHeader() } });
+  absorb(loginRes);
+  ok(loginRes.status === 302, '/oidc/login 302 到 IdP');
+  const authRes = await fetch(loginRes.headers.get('location'), { redirect: 'manual', headers: { cookie: jarHeader() } });
+  absorb(authRes);
+  ok(authRes.status === 302, 'IdP 发码回跳');
+  const cbRes = await fetch(authRes.headers.get('location'), { redirect: 'manual', headers: { cookie: jarHeader() } });
+  absorb(cbRes);
+  ok(cbRes.status === 302 && cbRes.headers.get('location') === '/panel', '回调成功回 next');
+  const sessionToken = jar.get('nxas_session');
+  ok(!!sessionToken && sessionToken.startsWith('nxas_s2.'), '会话 cookie 已签发');
+
+  // 4. 会话鉴权（cookie 与 Bearer 等价）
+  const me = await req('GET', '/api/auth/me');
+  ok(me.status === 200 && me.data?.email === 'user@example.com', `me 返回身份（${me.data?.email}）`);
+  const meBearer = await fetch(`${BASE}/api/auth/me`, { headers: { authorization: `Bearer ${sessionToken}` } });
+  ok(meBearer.status === 200, 'Bearer 会话等价');
+
+  // 5. 管理面与静态页
+  const status = await req('GET', '/api/auth/status');
+  ok(status.status === 200 && status.data?.complete === true, 'auth status complete');
   const health = await req('GET', '/api/health');
   ok(health.data?.ok === true, 'health');
-  const boot = await req('GET', '/api/bootstrap');
-  ok(Array.isArray(boot.data?.commands) && boot.data.commands.length > 5, 'bootstrap 命令表');
-
-  // 4. 静态页
   const page = await fetch(`${BASE}/`);
   const html = await page.text();
   ok(page.status === 200 && html.includes('<div id="root">'), '静态面板 index.html');
 
-  // 5. SSE 短票端到端：签发（带前缀） → 无 header 带票请求
-  //
-  // 这段是回归测试：短票曾经「签发了但永远验不过」——check.js 的路径正则只匹配
-  // /agent/:id/events，而实际请求路径是 /m/v1/agent/:id/events（差一层 /m/v1）。
-  // 断言必须打到「带票请求不再 401」这一步，只测签发端点会漏掉。
-  const gwSvc = await import(new URL('../src/modules/gateway/service.js', import.meta.url).href);
-  const { token: dt } = await gwSvc.issueToken({ name: 'smoke-ticket' });
-  ok(typeof dt === 'string' && dt.startsWith('nxas_d1.'), '签发 device token（短票前置）');
-
+  // 6. SSE 短票端到端（回归：短票曾「签发了但永远验不过」——断言必须打到带票请求不再 401）
   const sid = 'smoke-sess-1';
   const ticketRes = await fetch(`${BASE}/m/v1/sessions/${sid}/ticket`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${dt}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${sessionToken}`, 'Content-Type': 'application/json' },
     body: '{}',
   });
   const ticketBody = await ticketRes.json().catch(() => ({}));
   ok(ticketRes.status === 200 && typeof ticketBody.url === 'string',
     `短票签发 return url（${ticketBody.url || '无'}）`);
-  // direct 模式无前缀；nginx 模式必须带 /_nxas（否则手机端会打到根路径）
-  ok(!process.env.NXAS_GW_MODE || ticketBody.url?.startsWith('/_nxas/m/v1/'),
-    '短票 url 前缀随部署模式');
+  ok(!ticketBody.url?.startsWith('/_nxas'), 'direct 模式短票 url 无前缀');
+  if (!ticketBody.url) {
+    console.error('短票未签发，后续短票用例跳过\n', serverLog.slice(-2000));
+  } else {
 
   // 带票请求：本机没装 pi-web，上游不可达是预期的（502/404 都算「票通过了」），
-  // 唯一不能出现的是 401 —— 那是票被拒的信号（曾经就是这样：签发了却永远验不过）。
+  // 唯一不能出现的是 401——那是票被拒的信号。
   const viaTicket = await fetch(`${BASE}${ticketBody.url}`, { headers: { Accept: 'text/event-stream' } });
   ok(viaTicket.status !== 401, `带票请求不再 401（实际 ${viaTicket.status}）`);
   const replay = await fetch(`${BASE}${ticketBody.url}`, { headers: { Accept: 'text/event-stream' } });
@@ -135,14 +157,24 @@ try {
   const otherSid = 'smoke-sess-2';
   const t2 = await fetch(`${BASE}/m/v1/sessions/${otherSid}/ticket`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${dt}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${sessionToken}`, 'Content-Type': 'application/json' },
     body: '{}',
   });
   const url2 = (await t2.json().catch(() => ({}))).url;
-  const cross = await fetch(`${BASE}${url2.replace(otherSid, sid)}`);
+  const cross = url2 ? await fetch(`${BASE}${url2.replace(otherSid, sid)}`) : { status: -1 };
   ok(cross.status === 401, `短票换会话使用 → 401（实际 ${cross.status}）`);
+
+  }
+
+  // 7. 登出
+  const out = await fetch(`${BASE}/auth/logout`, { redirect: 'manual', headers: { cookie: jarHeader() } });
+  absorb(out);
+  ok(out.status === 302, '登出 302');
+  const afterOut = await req('GET', '/api/auth/me');
+  ok(afterOut.status === 401, '登出后 me → 401');
 } finally {
   server.kill('SIGTERM');
+  idp.close();
 }
 
 console.log(`\nsmoke: ${passed} passed, ${failed} failed`);

@@ -1,6 +1,6 @@
 {
   "name": "nx-as",
-  "version": "0.9.2",
+  "version": "0.11.0",
   "description": "nx-apiserver — nginx config file manager & auth gateway base (nginx + nx-as); managed conf.d files with nginx -t validation, backups and reload",
   "type": "module",
   "bin": {
@@ -23,7 +23,7 @@
     "dev:serve": "node bin/nx-as.mjs serve --no-open",
     "build": "vite build",
     "start": "pnpm run build && node bin/nx-as.mjs serve",
-    "test": "pnpm run lint && pnpm run build && node tests/smoke.mjs && node --test tests/unit/*.test.mjs",
+    "test": "pnpm run lint && pnpm run build && node tests/smoke.mjs && node tests/nginx-mode.test.mjs && node --test tests/unit/*.test.mjs",
     "lint": "eslint src tests scripts"
   },
   "repository": {

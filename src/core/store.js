@@ -9,10 +9,14 @@ export const fsp = _fsp;
 
 const EMPTY = () => ({
   version: 1,
-  auth: {
-    token: '',              // 空表示未设置；serve 启动时若无 token 则生成
+  oidc: {                   // OIDC SSO（go-ah 认证中心）——人的凭据唯一来源
+    issuer: '',             // 如 http://47.110.80.47:8082（逐字等于发现文档 issuer）
+    clientId: '',           // 在 go-ah 注册的 client_id（public + PKCE，无 secret）
+    redirectUri: '',        // 公网部署的精确回调地址；空 = 按请求动态构造（回环部署）
+    scopes: 'openid profile email',
+    sessionSecret: '',      // 会话 HMAC 密钥（持久化：重启不掉线；auth rotate 轮换）
+    allowedEmails: [],      // 登录白名单（空 = 放行全部 go-ah 用户）
   },
-  devices: [],              // 网关设备 token（gateway 模块管理）
   machineSecret: '',        // 机机密码（nginx 模板 Basic 注入；轮换走 nginx rotate-secret）
   nginx: {                  // nginx 托管配置（nginx 模块管理）
     domain: '',
@@ -30,8 +34,12 @@ function normalize(data) {
   const base = EMPTY();
   if (!data || typeof data !== 'object') return base;
   base.version = data.version ?? 1;
-  base.auth = { ...base.auth, ...(data.auth || {}) };
-  base.devices = Array.isArray(data.devices) ? data.devices : [];
+  base.oidc = { ...base.oidc, ...(data.oidc || {}) };
+  if (typeof base.oidc.allowedEmails === 'string') {
+    base.oidc.allowedEmails = base.oidc.allowedEmails.split(',').map((s) => s.trim()).filter(Boolean);
+  }
+  if (!Array.isArray(base.oidc.allowedEmails)) base.oidc.allowedEmails = [];
+  // 旧结构的 auth.token / devices 已废弃（OIDC SSO 替代）：读进来直接丢弃，不再落盘
   base.machineSecret = data.machineSecret || '';
   base.nginx = { ...base.nginx, ...(data.nginx || {}) };
   base.certs = data.certs && typeof data.certs === 'object'

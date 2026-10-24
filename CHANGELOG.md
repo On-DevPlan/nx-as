@@ -1,5 +1,93 @@
 # Changelog
 
+## 0.11.0 (2026-10-24)
+
+**SSO 全面接入**——go-ah OIDC 单点登录成为唯一的人凭据入口，device token / 静态管理密钥 /
+NX_AS_TOKEN 全部退役；内网穿透收成 `tunnel add` 一条命令；公网暴露面收敛为 nginx 一层
+（gost relay 本体进回环）。
+
+### Added
+
+- **SSO 全面接入（go-ah OIDC）**：public client + PKCE S256 授权码流程（discovery 自举并校验
+  issuer 逐字一致；code 换 token 走服务端 back-channel，身份读 `/oauth2/userinfo`；
+  refresh_token 一律不落地——过期重走 302 授权，IdP 全局会话 30 天内无感跳转）。统一会话
+  `nxas_s2.<payload>.<HMAC>`：浏览器 cookie 与 CLI Bearer 同一凭据（`runtime/session.js`，
+  nginx `auth_request` 与 direct 模式校验同一份，吊销/轮换即刻失效）。邮箱白名单是启动门槛：
+  gost-as 容器首启校验 issuer / client_id / `NXAS_OIDC_ALLOWED_EMAILS` 三要素，缺一拒绝启动
+  （不设白名单等于把隧道开放给所有 go-ah 用户；本地调试 `NXAS_OIDC_ENFORCE=0` 跳过）。
+- **CLI 会话与 client 域 OIDC 配对**：`nx-as login` 走本机回环 SSO handoff
+  （`core/sso-handoff.js`：浏览器登录后一次性把会话 token 交回 CLI），会话落
+  `~/.nx-as/credentials.json`（0600，7 天）；`nx-as client login` 同通道配对，
+  `client register/unregister/reconcile` 全部复用配对会话——client 独立 token 废除。
+- **`tunnel add/list/remove` 一条龙**：`nx-as tunnel add <名> <本地端口>` 串起「SSO 配对
+  （未配对自动弹浏览器）→ server 注册隧道 conf（备份 → `nginx -t` 失败还原 → reload 管线）
+  → 自动拉起常驻 gost」（`core/gost-daemon.js`：独立进程聚合全部 `-L`，脱离 CLI 存活，
+  清单变更自动重启）；`tunnel list` 本地 ∪ server 对账；`tunnel remove` 注销并同步 gost。
+  日常只有这三条命令。
+- **cert 模块并入 nginx**：原独立 cert 模块收编为 `nginx cert status|import|remove`——外部
+  证书只管 PEM 导入与校验（解析 / 公私钥配对 / 到期），nx-as 不签证书；导入成功自动回填
+  `store.nginx.certPath/keyPath`，看板表单 / 网关入口直接可用，无需手抄路径。
+- **UI 重构**：面板一页一色块（nginx / auth / system 每 tab 单主体卡）；cert 并入 nginx tab
+  （证书导入弹窗 + 状态，独立页面删除）；client 面板以「三步指引」为主体（① 服务器 compose
+  → ② `oidc register` → ③ `tunnel add`）；auth 页只留会话与 OIDC 接入配置。
+- **网络模型收紧**：gost relay 本体只绑回环 18442，公网 relay 口 8442 改由 nginx stream L4
+  反代——**公网唯一暴露面 = nginx**；隧道数据面 公网:<端口> → nginx `auth_request`（SSO
+  会话校验）→ 回环 rtcp → 本地服务；`docker/bind-audit.mjs` 每分钟扫描非 nginx 的公网监听，
+  relay bind 滥用（绕过鉴权开裸端口）告警落审计。
+- **http.d 数据卷持久化**：容器首启把 `/etc/nginx/http.d` 符号链接到 `/data/http.d`——面板
+  写进来的 `nxas-tunnel-*.conf` 落数据卷，重建容器不丢；nginx 模板仍每次启动从镜像刷新
+  （防旧模板覆盖新镜像的修复）。
+- **文档 SSO 化**：README 重写为「nginx 配置文件管理器 + go-ah SSO 网关基座」，快速开始收敛
+  为三条命令（compose up → `oidc register` → `tunnel add`）；device token 时代内容清零。
+- **nginx 看板（UI 表单 ↔ 配置文件双向映射）**：面板 nginx 页重构为看板主体——托管目录里
+  每个 `*.conf` 一行卡片（类型/入口/上游/TLS/WS/鉴权/状态），模仿 nginx-proxy-manager 的
+  管理看板。「添加反代站点 / 添加端口转发」表单把 UI 输入直接映射为托管目录里的配置文件：
+  站点（域名→上游，可选 WS 升级/TLS）落成 `nxas-site.<域名slug>.conf`，特殊端口转发
+  （监听端口→上游）落成 `nxas-port.<端口>.conf`，保存走同一条 备份→`nginx -t` 失败还原→
+  graceful reload 管线，保存前有防抖实时预览（渲染将要落盘的配置文本 + 即时校验）。
+  表单文件带 `# nxas-spec <json>` 头，看板「编辑」从 spec 回填表单整体重渲染；无 spec 的
+  手写/历史配置解析 server 块推断字段只读展示，「配置」进原始编辑器（文件管理器降级为
+  兜底入口，停用/删除/备份还原共用）。CLI 同源新增：`nginx hosts`（看板清单）、
+  `nginx host apply`（`--spec` JSON 或 `--kind/--domains/--listen-port/--upstream/--ws/
+  --tls/--cert-path/--key-path/--name` 拆开 flag，`--preview` 只渲染不落盘）、
+  `nginx host remove <名>`。
+- `tests/unit/nginx-hosts.test.mjs`：spec 校验 / 渲染 / conf 解析推断 / listHosts 分类 /
+  upsert 换名替换 / -t 失败还原。
+
+### Removed（breaking）
+
+- **device token 体系整体退役**：`device issue/list/revoke`、per-device token 校验、设备管理
+  页全部删除；store 旧结构的 `devices` / `auth.token` 读入即丢弃、不再落盘。人的访问统一
+  走 go-ah SSO 会话；`/m/v1/*` 的程序化访问改持会话 Bearer（CLI 配对会话）或一次性 SSE 短票。
+- **静态管理密钥与 `NX_AS_TOKEN`**：Bearer 管理密钥登录移除；`auth.verify` 退化为纯存活探针
+  （公开路由，供就绪探测 / 端口协商 / client doctor）。
+- **client 独立 token 与旧子命令**：`client list` 等 token 时代命令移除——清单看
+  `tunnel list` / `client reconcile`，配对统一 `client login`。
+
+### Fixed
+
+- **nginx 看板（UI 表单 ↔ 配置文件双向映射）**：面板 nginx 页重构为看板主体——托管目录里
+  每个 `*.conf` 一行卡片（类型/入口/上游/TLS/WS/鉴权/状态），模仿 nginx-proxy-manager 的
+  管理看板。「添加反代站点 / 添加端口转发」表单把 UI 输入直接映射为托管目录里的配置文件：
+  站点（域名→上游，可选 WS 升级/TLS）落成 `nxas-site.<域名slug>.conf`，特殊端口转发
+  （监听端口→上游）落成 `nxas-port.<端口>.conf`，保存走同一条 备份→`nginx -t` 失败还原→
+  graceful reload 管线，保存前有防抖实时预览（渲染将要落盘的配置文本 + 即时校验）。
+  表单文件带 `# nxas-spec <json>` 头，看板「编辑」从 spec 回填表单整体重渲染；无 spec 的
+  手写/历史配置解析 server 块推断字段只读展示，「配置」进原始编辑器（文件管理器降级为
+  兜底入口，停用/删除/备份还原共用）。CLI 同源新增：`nginx hosts`（看板清单）、
+  `nginx host apply`（`--spec` JSON 或 `--kind/--domains/--listen-port/--upstream/--ws/
+  --tls/--cert-path/--key-path/--name` 拆开 flag，`--preview` 只渲染不落盘）、
+  `nginx host remove <名>`。
+- `tests/unit/nginx-hosts.test.mjs`：spec 校验 / 渲染 / conf 解析推断 / listHosts 分类 /
+  upsert 换名替换 / -t 失败还原。
+
+### Fixed
+
+- **`files.js` 读取在 Windows 上的假阳性符号链接拒绝**：`realpath` 在 win32 会展开 8.3
+  短名（`MINISF~1` → `MINISFORUM`），字符串等值比较必失败——改为末段 `lstat` 判符号链接
+  （跨平台可靠），POSIX 上保留严格 realpath 归一比对（父目录链接逃逸守卫）。
+- conf 解析器单行 server 块（`server { listen 9090; }`）花括号配平后无法收尾的问题。
+
 ## 0.9.2 (2026-10-20)
 
 ### Changed

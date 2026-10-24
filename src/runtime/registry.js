@@ -3,8 +3,6 @@ import { ACTIONS } from '../index.js';
 // 模块注册表：id ↔ 目录名一致；带 view 的模块必须有 view.jsx
 export const MODULES = [
   { id: 'auth', view: true },
-  { id: 'cert', view: true },
-  { id: 'gateway', view: true },
   { id: 'nginx', view: true },
   { id: 'system', view: true },
 ];
@@ -19,8 +17,9 @@ function selfCheck(actions) {
     if (seenIds.has(a.id)) throw new Error(`action id 重复: ${a.id}`);
     seenIds.add(a.id);
 
-    const paths = Array.isArray(a.cli?.[0]) ? a.cli : [a.cli];
-    if (!paths?.length || !paths[0]?.length) throw new Error(`action 没有 CLI 命令: ${a.id}`);
+    // cli:null = 面板专用端点（http-only，如 gost 进程开关）；仍必须有 http
+    const paths = Array.isArray(a.cli?.[0]) ? a.cli : (a.cli ? [a.cli] : []);
+    if (!paths.length && !a.http) throw new Error(`action 既无 CLI 也无 HTTP: ${a.id}`);
     for (const p of paths) {
       const key = p.join(' ');
       if (seenCli.has(key)) throw new Error(`CLI 命令重复: ${key}`);

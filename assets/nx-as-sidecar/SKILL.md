@@ -22,7 +22,7 @@ description: 当用户要"给自己的应用套上鉴权网关容器"或提到 n
 2. **唯一入口 nginx :8080** —— `EXPOSE` 之外不开第二个映射端口。7801（网关）与主进程端口
    只在容器内；调试端口要 -p 映射出去时，知道那是在绕过鉴权。
 3. **`/data` 卷必须挂** —— store.json（设备/密钥/审计/证书元数据）都在里面。不挂卷 =
-   重建容器全部 device token 作废、面板重新初始化。
+   重建容器后 SSO 重新登录即可（会话签名密钥在挂载卷的 store.json 里则不掉线）。
 4. **锁版本 FROM** —— `FROM ghcr.io/on-devplan/nx-as-base:0.7.1`，不用 latest
    （entrypoint/模板行为会漂移——47 服务器踩过：旧 entrypoint 渲不了新模板 → 重启循环）。
 
@@ -84,7 +84,8 @@ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8080/_nxas/m/v1/sessio
 
 ```bash
 # 1. 签发 token（容器内 CLI 或面板 http://<host>:8080/_nxas/panel）
-docker exec myapp-nxas nx-as device issue --name "my-phone"
+# device token 已废除；手机/PWA 浏览器打开即跳 go-ah SSO 登录
+# 脚本接入：nx-as login --server <公网地址>（或 Authorization: Bearer <SSO 会话 token>）
 # → nxas_d1.<id>.<secret>   secret 只出现这一次，泄露即吊销重签
 
 # 2. 浏览器访问任意受保护路径 → 302 到 /_nxas/login → 粘贴 token → 回原路径（零感知）

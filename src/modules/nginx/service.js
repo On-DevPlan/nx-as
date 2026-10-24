@@ -104,7 +104,7 @@ server {
         proxy_set_header X-Forwarded-For $remote_addr;
     }
 
-    # ── 管理面板（管理密钥在 nx-as 侧校验）──
+    # ── 管理面板（会话在 nx-as 侧校验（go-ah SSO））──
     location / {
         proxy_pass http://127.0.0.1:${gatewayPort};
         proxy_set_header X-Forwarded-For $remote_addr;

@@ -1,11 +1,31 @@
-import { applySpec, cliPathsOf, usageOf } from './spec.js';
+import { applySpec, cliPathsOf, usageOf, commandTokenOf } from './spec.js';
 import { CODES } from '../core/errors.js';
 import { VERSION } from '../core/version.js';
 import { ACTIONS } from '../index.js';
 import { CLIENT_ACTIONS } from '../client/actions.js';
 
 export { VERSION };
-export const MODULE_IDS = ['auth', 'cert', 'gateway', 'nginx', 'system', 'client'];
+export const MODULE_IDS = ['auth', 'nginx', 'system', 'client'];
+
+// ---------- CLI 登录（浏览器 SSO handoff；核心在 core/sso-handoff.js，client 域配对共用） ----------
+
+// nx-as login [--server <url>]：浏览器 SSO → 会话 token 落 ~/.nx-as/credentials.json（0600）
+async function cmdLogin(ctx) {
+  const { ssoHandoff, fetchIdentity } = await import('../core/sso-handoff.js');
+  const { rememberCredential } = await import('../core/credentials.js');
+  const server = String(ctx.server || process.env.NXAS_SERVER_URL || 'http://127.0.0.1:7801').replace(/\/+$/, '');
+  const { token } = await ssoHandoff({ server, open: !ctx['no-open'] });
+  const identity = await fetchIdentity(server, token);
+  const entry = await rememberCredential({ server, token, identity });
+  console.log(`已登录 ${identity?.email || identity?.sub || '(身份未知)'}；会话已存 credentials.json（${entry.obtainedAt.slice(0, 10)} 起 7 天有效）`);
+  return { status: 'ok', server, identity, obtainedAt: entry.obtainedAt };
+}
+
+async function cmdLogout() {
+  const { forgetCredentials } = await import('../core/credentials.js');
+  const r = await forgetCredentials();
+  return { status: 'ok', removed: r.removed, note: '本地会话凭据已清除；如需全端下线再在服务器上执行 nx-as auth rotate' };
+}
 
 // 本地 client 守护命令（serve 型）：起本地管理面 web
 async function cmdClientServe(ctx) {
@@ -31,13 +51,8 @@ async function cmdServe(ctx) {
   // 开关：--no-open 与共享环境变量 NX_SERVE_NO_OPEN 任一为真都不开浏览器
   const canOpen = autoOpenEnabled(ctx['no-open']);
 
-  // serve 启动时确保有 token：CLI 参数 > 环境变量 > store 里存的 > 自动生成
-  // 密钥必须先于端口冲突处理拿到：管理面 /api/* 是 Bearer-only，
-  // 探测「端口上跑的是不是我」要带上 Authorization 头才过得去鉴权。
-  const { ensureToken } = await import('../modules/auth/service.js');
-  const token = await ensureToken(ctx.token);
-  const { setRuntimeToken } = await import('./api.js');
-  setRuntimeToken(token);
+  // SSO 时代 serve 不再需要启动期密钥：管理面探测端点 /api/bootstrap 是公开签名，
+  // 鉴权全部走 OIDC 会话（浏览器 /oidc/login；CLI nx-as login）
 
   let server;
   try {
@@ -45,17 +60,15 @@ async function cmdServe(ctx) {
   } catch (err) {
     if (!err || err.code !== 'EADDRINUSE') throw err;
 
-    // 端口被占：先问一句「上面跑的是不是我」（探测带管理密钥）
-    const decision = await resolvePortConflict(port, APP_NAME, connectHost, {
-      Authorization: `Bearer ${token}`,
-    });
+    // 端口被占：先问一句「上面跑的是不是我」（/api/bootstrap 公开，匿名探测即可）
+    const decision = await resolvePortConflict(port, APP_NAME, connectHost);
 
     if (decision.action === 'reuse') {
-      // 自己的面板已经在跑：不重复启动，直接把浏览器指过去（控制台链接带密钥）
-      const consoleUrl = `http://${host}:${decision.port}/?token=${token}`;
-      console.log(`${APP_NAME} 已在运行：${consoleUrl}`);
+      // 自己的面板已经在跑：不重复启动，直接把浏览器指过去
+      const panelUrl = `http://${host}:${decision.port}`;
+      console.log(`${APP_NAME} 已在运行：${panelUrl}`);
       console.log('直接打开浏览器（不重复启动）；如需重启请先停掉旧实例');
-      if (canOpen && host !== '0.0.0.0') openBrowser(consoleUrl);
+      if (canOpen && host !== '0.0.0.0') openBrowser(panelUrl);
       return;
     }
 
@@ -66,11 +79,9 @@ async function cmdServe(ctx) {
   const boundPort = server.address().port;
 
   const displayHost = host === '0.0.0.0' ? '0.0.0.0' : host;
-  console.log(`网关:   http://${displayHost}:${boundPort}   (/m/v1/* 反代 pi-web，device token 鉴权)`);
-  console.log(`面板:   http://${displayHost}:${boundPort}   (设备管理/设置，管理密钥)`);
-  console.log(`控制台: http://${displayHost}:${boundPort}/?token=${token}   (带密钥直达，可收藏)`);
-  console.log(`密钥:   ${token}`);
-  console.log(`(管理面 /api/* 走上述密钥；网关 /_nxas/m/v1/* 走 device token：nx-as device issue --name <设备名>)`);
+  console.log(`网关:   http://${displayHost}:${boundPort}   (/m/v1/* 反代 pi-web，SSO 会话鉴权)`);
+  console.log(`面板:   http://${displayHost}:${boundPort}   (浏览器打开即走 go-ah 单点登录)`);
+  console.log(`CLI:    nx-as login   (本机回环 handoff 拿会话 token，供 client 域/脚本用)`);
   console.log('提示:   模型/插件/技能管理在 pi-web 自带设置页（http://127.0.0.1:30141 或经网关 Web UI）；扩展装入 ~/.nx-as/pi-agent/extensions/');
 
   // --with-web：顺带拉起 pi-web（安全启动器：随机 PI_WEB_PASSWORD，只听 127.0.0.1）
@@ -130,7 +141,100 @@ function renderHelp(entries, topic) {
   return [head, ...lines].join('\n');
 }
 
+// ---------- 穿透一条龙（极简主命令：配对→注册→gost 常驻，一步到位） ----------
+
+async function cmdTunnelAdd(ctx) {
+  const { loadClientConfig, updateClientConfig, registerTunnel, gostArgs } = await import('../client/service.js');
+  // 1. server 地址：--server 或已有配置
+  const cur = await loadClientConfig();
+  const server = String(ctx.server || cur.server.api || '').replace(/\/+$/, '');
+  if (!/^https?:\/\//.test(server)) {
+    throw Object.assign(new Error('缺少 server：--server http://<服务器>:8090/_nxas（首次给一次即记住）'), { code: 'INVALID_INPUT' });
+  }
+  if (server !== cur.server.api) await updateClientConfig({ server: { api: server, token: '' } });
+  // 2. 凭据：无会话则浏览器 SSO 配对（go-ah 全局会话内免密）
+  const { resolveSessionToken } = await import('../core/credentials.js');
+  let token = await resolveSessionToken();
+  if (!token) {
+    const { ssoHandoff, fetchIdentity } = await import('../core/sso-handoff.js');
+    const { rememberCredential } = await import('../core/credentials.js');
+    console.log('[tunnel] 首次使用：浏览器完成登录（go-ah 单点登录）');
+    const r = await ssoHandoff({ server, open: !ctx['no-open'] });
+    token = r.token;
+    const identity = await fetchIdentity(server, token);
+    await rememberCredential({ server, token, identity });
+  }
+  // 3. 注册（server conf 单一模板 + 本地清单）
+  const r = await registerTunnel({ name: ctx.name, local: Number(ctx.local), public: ctx['public-port'] ? Number(ctx['public-port']) : undefined });
+  // 4. gost 常驻（独立进程；已在跑则复用）
+  const { ensureGostDaemon } = await import('../core/gost-daemon.js');
+  const daemon = await ensureGostDaemon({ args: await gostArgs() }).catch((e) => ({ status: `failed: ${e.message}` }));
+  return { tunnel: r.tunnel, url: r.url, gost: daemon.status, server };
+}
+
 const BUILTINS = [
+  {
+    id: 'tunnel.add',
+    cli: ['tunnel', 'add'],
+    summary: '穿透一条龙：首次自动浏览器登录 → 注册隧道（server conf + 本地清单）→ 自动拉起常驻 gost（本地端口=公网端口；--public-port 改公网口；--server 首次给一次）',
+    args: [{ name: 'name', required: true }, { name: 'local', required: true }],
+    flags: { 'public-port': { type: 'number' }, server: { type: 'string' }, 'no-open': { type: 'boolean' } },
+    run: (ctx) => cmdTunnelAdd(ctx),
+    render: (r) => [
+      `✓ 隧道 ${r.tunnel.name}：本地 :${r.tunnel.local} → 公网 :${r.tunnel.public}`,
+      `✓ gost：${r.gost === 'started' ? '已拉起常驻进程' : r.gost === 'already_running' ? '复用已运行进程' : r.gost}`,
+      `访问：http://<服务器>:${r.tunnel.public}/  （首次访问跳 go-ah 登录；安全组需放行 ${r.tunnel.public}）`,
+    ].join('\n'),
+  },
+  {
+    id: 'tunnel.list',
+    cli: ['tunnel', 'list'],
+    summary: '穿透总览（本地 ∪ server 对账 + gost 状态）',
+    run: async () => {
+      const { reconcile } = await import('../client/service.js');
+      const { hasGostRunning } = await import('../core/gost-daemon.js');
+      const r = await reconcile();
+      r.gost.running = await hasGostRunning();
+      return r;
+    },
+    render: (r) => [
+      `gost: ${r.gost.running ? '运行中' : '未运行（tunnel add 会自动拉起）'}${r.serverError ? `  server 错误: ${r.serverError}` : ''}`,
+      ...r.rows.map((t) => {
+        const side = t.localSide && t.serverSide ? '通✓' : t.serverSide ? '仅server' : '仅本地';
+        return `  ${side.padEnd(8)} ${t.name.padEnd(14)} 本地:${t.local ?? '?'} 公网:${t.public ?? '?'} ${t.url || ''}`;
+      }),
+      r.rows.length ? '' : '  (无隧道 — tunnel add <名> <本地端口>)',
+    ].filter((l) => l !== '').join('\n'),
+  },
+  {
+    id: 'tunnel.remove',
+    cli: ['tunnel', 'remove'],
+    summary: '删除穿透（server conf + 本地清单一起删）',
+    args: [{ name: 'name', required: true }],
+    run: async (ctx) => {
+      const { unregisterTunnel } = await import('../client/service.js');
+      return unregisterTunnel({ name: ctx.name });
+    },
+    render: (r) => `已删除: ${r.removed.name}（server 侧 conf 已备份）`,
+  },
+  {
+    id: 'login',
+    cli: ['login'],
+    summary: '浏览器 SSO 登录（go-ah 单点登录；会话 token 落 ~/.nx-as/credentials.json 供 CLI/脚本用；--server 连远程）',
+    flags: {
+      server: { type: 'string' },
+      'no-open': { type: 'boolean' },
+    },
+    run: (ctx) => cmdLogin(ctx),
+    render: (r) => `server:  ${r.server}\n身份:    ${r.identity?.email || r.identity?.sub || '(未取得)'}`,
+  },
+  {
+    id: 'logout',
+    cli: ['logout'],
+    summary: '清除本地会话凭据（credentials.json；全端下线在服务器执行 nx-as auth rotate）',
+    run: () => cmdLogout(),
+    render: (r) => `${r.note}（清除 ${r.removed} 条）`,
+  },
   {
     id: 'serve',
     cli: ['serve'],
@@ -401,7 +505,7 @@ export function commandEntry(action) {
   return {
     id: action.id,
     module: module || 'platform',
-    command: ['nx-as', ...cliPathsOf(action)[0]].join(' '),
+    command: ['nx-as', ...(cliPathsOf(action)[0] || [])].join(' ') || commandTokenOf(action),
     usage: usageOf(action),
     summary: action.summary || '',
     http: action.http ? action.http.join(' ') : null,

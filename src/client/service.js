@@ -1,7 +1,8 @@
 // nx-as client：本地侧服务（连接远程 gost-as server 的本地管理面）
 //
 // 职责（与 server 侧 src/modules/* 平行的独立顶层，不进 server 面板的 tab 体系）：
-// - 连接配置：server API 地址 / 管理密钥 / relay 凭据（~/.nx-as/client.json）
+// - 连接配置：server API 地址 / 会话 token / relay 凭据（~/.nx-as/client.json）
+//   会话 token 优先用显式配置；否则回落 credentials.json（nx-as login --server 落盘）
 // - 本地隧道清单：name/local/public（同一文件持久化）
 // - gost 进程管理：单进程聚合所有 -L rtcp 参数；清单变更自动重启；退出自动拉起
 // - 远程调用：代理 server 的 /api/nginx/files（注册/删除/清单），token 只在本进程内使用
@@ -175,17 +176,60 @@ export async function gostStatus() {
   };
 }
 
+// ---------- OIDC 配对：本地 ↔ 远程 nx-as（不再有独立 token——浏览器 SSO 形成配对） ----------
+
+export async function pairWithServer({ server, open = true } = {}) {
+  const { ssoHandoff, fetchIdentity } = await import('../core/sso-handoff.js');
+  const { rememberCredential } = await import('../core/credentials.js');
+  const cur = await loadClientConfig();
+  const target = String(server || cur.server.api || '').replace(/\/+$/, '');
+  if (!/^https?:\/\/.+/.test(target)) {
+    throw badInput('缺少 server 地址（--server http://<host>:<port>/[_nxas]，或先 client config set --server）');
+  }
+  const { token } = await ssoHandoff({ server: target, open });
+  const identity = await fetchIdentity(target, token);
+  await rememberCredential({ server: target, token, identity });
+  if (target !== cur.server.api) {
+    await updateClientConfig({ server: { api: target, token: '' } });
+  }
+  return { server: target, identity };
+}
+
+// 当前配对状态（面板/doctor 显示用）：有会话条目 + 身份
+export async function pairingStatus() {
+  const { credentialFor } = await import('../core/credentials.js');
+  const cur = await loadClientConfig();
+  const entry = await credentialFor(cur.server.api);
+  return {
+    server: cur.server.api || '',
+    paired: Boolean(entry?.token),
+    identity: entry?.identity || null,
+    obtainedAt: entry?.obtainedAt || null,
+  };
+}
+
 // ---------- 远程调用（代理 server 的 nx-as API；token 不出本进程边界以外） ----------
+// SSO 时代 token = 会话 token（nxas_s2.*）：client.json 显式配置优先，
+// 否则回落 credentials.json（nx-as login --server <同地址> 落盘的条目）。
+
+async function resolveClientToken() {
+  const cur = await loadClientConfig();
+  if (cur.server.token) return cur.server.token;
+  const { credentialFor } = await import('../core/credentials.js');
+  const entry = await credentialFor((cur.server.api || '').replace(/\/_nxas\/?$/, ''));
+  return entry?.token || null;
+}
 
 async function serverApi(method, path, body) {
   const cur = await loadClientConfig();
-  if (!cur.server.api || !cur.server.token) {
-    throw badInput('尚未配置 server 连接（nx-as client config --server <api> --token <tok>）');
+  const token = await resolveClientToken();
+  if (!cur.server.api || !token) {
+    throw badInput('尚未配置 server 连接（nx-as client config --server <api>，并用 nx-as login --server <api> 登录）');
   }
   const res = await fetch(cur.server.api + path, {
     method,
     headers: {
-      Authorization: `Bearer ${cur.server.token}`,
+      Authorization: `Bearer ${token}`,
       ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -215,60 +259,12 @@ export async function remoteList() {
   return { host, tunnels };
 }
 
-// 一键注册：server 侧先写 conf（失败不动本地，避免两侧不一致）→ 本地加隧道 + 重启 gost
+// 一键注册：server 侧用**服务端单一模板**生成 conf（失败不动本地，避免两侧不一致）
+// → 本地加隧道 + 重启 gost。conf 模板不再嵌在客户端——保证鉴权链路与 server 路由同步演化。
 export async function registerTunnel({ name, local, public: pub }) {
   const pubPort = pub ?? local;
-  const rtcpPort = 10000 + pubPort;
-  const conf = `# nx-as gost-as 隧道: ${name}（本地 127.0.0.1:${local} → 公网 :${pubPort}）
-# 由 nx-as client register 生成
-server {
-    listen ${pubPort};
-    server_name _;
-
-    location /_nxas/ {
-        proxy_pass http://127.0.0.1:7801/_nxas/;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-        proxy_buffering off;
-        proxy_read_timeout 1h;
-    }
-
-    location = /_tunnel_auth_${pubPort} {
-        internal;
-        proxy_pass http://127.0.0.1:7801/_nxas/auth/check;
-        proxy_pass_request_body off;
-        proxy_set_header Content-Length "";
-        proxy_set_header Authorization $http_authorization;
-        proxy_set_header Cookie $http_cookie;
-        proxy_set_header X-Original-Uri $request_uri;
-        proxy_set_header X-Original-Method $request_method;
-        proxy_set_header X-Forwarded-For $remote_addr;
-    }
-
-    location @nxas_login_${pubPort} {
-        return 302 /_nxas/login?next=$request_uri;
-    }
-
-    location / {
-        auth_request /_tunnel_auth_${pubPort};
-        auth_request_set $nxas_device $upstream_http_x_device_id;
-        error_page 401 = @nxas_login_${pubPort};
-        proxy_pass http://127.0.0.1:${rtcpPort};
-        proxy_set_header Host $http_host;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_http_version 1.1;
-        proxy_set_header Connection $connection_upgrade;
-        proxy_buffering off;
-        proxy_read_timeout 1h;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        add_header X-Nxas-Device $nxas_device always;
-    }
-}
-`;
-  // server 先行（conf 幂等写入；失败抛错且本地未动）→ 本地清单（同名=接管，幂等）→ gost 重启
-  const r = await serverApi('POST', `/api/nginx/files/nxas-tunnel-${name}.conf`, { content: conf });
+  // server 先行（幂等写入；失败抛错且本地未动）→ 本地清单（同名=接管，幂等）→ gost 重启
+  const r = await serverApi('POST', '/api/nginx/tunnel', { name, 'public-port': pubPort });
   const tunnel = await addTunnel({ name, local, public: pub, upsert: true });
   await restartGost().catch(() => {});
   return { tunnel, server: r, url: (await remoteList()).tunnels.find((t) => t.name === tunnel.name)?.url || null };
@@ -308,28 +304,43 @@ export async function reconcile() {
 }
 
 export async function unregisterTunnel({ name }) {
-  // server 先删（不存在也继续）→ 本地清单移除 → gost 重启
-  const server = await serverApi('DELETE', `/api/nginx/files/nxas-tunnel-${name}.conf`).catch((e) => ({ error: e.message }));
+  // server 先删（单一模板端点；不存在也继续）→ 本地清单移除 → gost 重启
+  const server = await serverApi('POST', '/api/nginx/tunnel/remove', { name }).catch((e) => ({ error: e.message }));
   const removed = await removeTunnel({ name });
   await restartGost().catch(() => {});
   return { removed, server };
 }
 
-// 连接自检：server API 可达 + relay 配置存在 + gost 二进制可用
+// 连接自检：server API 可达 + 会话有效 + relay 配置存在 + gost 二进制可用
 export async function doctor() {
   const cur = await loadClientConfig();
   const checks = {};
-  checks.config = Boolean(cur.server.api && cur.server.token && cur.relay.url);
+  checks.config = Boolean(cur.server.api && cur.relay.url);
   if (cur.server.api) {
     try {
-      const res = await fetch(cur.server.api + '/api/auth/verify', { headers: { Authorization: `Bearer ${cur.server.token}` } });
+      const res = await fetch(cur.server.api + '/api/auth/verify', { signal: AbortSignal.timeout(5000) });
       const j = await res.json().catch(() => ({}));
-      checks.server = j.valid === true ? 'ok' : `token 无效（valid:false）`;
+      checks.server = j.valid === true ? 'ok' : `异常（valid:${j.valid}）`;
     } catch (e) {
       checks.server = `不可达: ${e.message}`;
     }
+    const token = await resolveClientToken();
+    if (token) {
+      try {
+        const res = await fetch(cur.server.api + '/api/auth/me', {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(5000),
+        });
+        checks.session = res.ok ? `ok（${(await res.json())?.email || ''}）` : '会话无效/过期（nx-as login 重新登录）';
+      } catch (e) {
+        checks.session = `会话校验失败: ${e.message}`;
+      }
+    } else {
+      checks.session = '无会话（nx-as login --server ' + cur.server.api + '）';
+    }
   } else {
     checks.server = '未配置';
+    checks.session = '未配置';
   }
   try {
     await new Promise((resolve, reject) => {

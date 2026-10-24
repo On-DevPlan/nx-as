@@ -4,7 +4,7 @@
 //   ① source-check（Host 白名单，GW_ALLOWED_HOSTS 环境变量；默认仅 localhost/loopback/IP）
 //   ② 节流（认证前按 IP）
 //   ③ 短票端点（SSE events 走一次性票）
-//   ④ device-auth（Bearer → store 校验）——决策逻辑在 check.js（与 nginx 模式的 /auth/check 共享）
+//   ④ 会话鉴权（SSO 统一会话：浏览器 cookie / CLI Bearer）——决策逻辑在 check.js
 //   ⑤ 审计 + 反代（注入 Authorization: Basic pi:<机机密码>，机机密码与 pi-web PI_WEB_PASSWORD 同源）
 //
 // nginx 模式（NXAS_GW_MODE=nginx）下本模块不挂载：数据路径由 nginx 直代 pi-web，
@@ -96,9 +96,10 @@ async function _handleGateway(req, res, url) {
     return sendJson(res, 429, { ok: false, error: 'Too many failed attempts' }, { 'Retry-After': String(Math.max(1, Math.ceil(blockMs / 1000))) });
   }
 
-  // ④ device-auth（决策逻辑与 nginx 模式 /auth/check 同源：check.js）
+  // ④ 会话鉴权（决策逻辑与 nginx 模式 /auth/check 同源：check.js；cookie 是浏览器场景载体）
   const r = await decide({
     authorization: req.headers.authorization,
+    cookieHeader: req.headers.cookie,
     rawUri: url.pathname + url.search,
     ip,
     userAgent: req.headers['user-agent'] || '',
@@ -107,9 +108,9 @@ async function _handleGateway(req, res, url) {
     return sendJson(res, 429, { ok: false, error: 'Too many failed attempts' }, { 'Retry-After': String(r.retryAfterSec) });
   }
   if (r.decision === 'deny-auth') {
-    return sendJson(res, 401, { ok: false, error: 'device token 缺失或无效', code: 'UNAUTHORIZED' }, { 'Retry-After': String(r.retryAfterSec) });
+    return sendJson(res, 401, { ok: false, error: '未登录或会话无效（浏览器访问 /oidc/login 走 SSO；CLI 用 nx-as login 获取会话）', code: 'UNAUTHORIZED' }, { 'Retry-After': String(r.retryAfterSec) });
   }
-  const device = r.device;
+  const session = r.session;
 
   // SSE 短票换取端点：POST /m/v1/sessions/:id/ticket（Bearer 已在上面验过）
   //
@@ -133,9 +134,9 @@ async function _handleGateway(req, res, url) {
   // pi-web /api/agent/:id/events 会 401（它认 Basic 或浏览器 cookie，二者都没有）——
   // 短票通道实际上从来打不通（2026-09-29 线上实测确认）。安全边界不变：
   // 客户端拿不到 Basic（只进上游请求头），且票仍只能打开「签发时绑定」的那个会话。
-  const viaTicket = device.ticket === true
+  const viaTicket = session.ticket === true
     || String(req.headers['x-auth-cred'] || '').toLowerCase() === 'ticket';
-  appendAudit({ action: 'gw.proxy', deviceId: device.id, viaTicket, detail: { method: req.method, path: url.pathname } }).catch(() => {});
+  appendAudit({ action: 'gw.proxy', userId: session.sub, viaTicket, detail: { method: req.method, path: url.pathname } }).catch(() => {});
   return proxyToUpstream(req, res, upstreamPath);
 }
 
@@ -162,7 +163,7 @@ function proxyToUpstream(req, res, upstreamPath) {
   );
   upstreamReq.on('error', (err) => {
     if (!res.headersSent) {
-      sendJson(res, 502, { ok: false, error: `pi-web 上游不可达: ${err.message}`, code: 'EXTERNAL' });
+      sendJson(res, 502, { ok: false, error: `pi-web 上游不可达: ${err.message}（本机调试：nx-as serve --with-web 拉起 pi-web；gost-as 形态无 pi-web，属正常）`, code: 'EXTERNAL' });
     } else {
       res.end();
     }

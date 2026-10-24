@@ -3,10 +3,11 @@
 ## 驱动关系
 
 ```
-手机 / PWA（device token）            本机面板 / CLI（单用户密钥）
+手机 / PWA / CLI / 面板（同一 SSO 会话：go-ah OIDC 登录签发）
         │ /m/v1/*                            │ /api/*
         ▼                                    ▼
-  serve (node:http) ──► gateway（source-check → 节流 → device-auth → 审计 → 反代）
+  serve (node:http) ──► gateway（source-check → 节流 → 会话校验 → 审计 → 反代）
+        │                                    │        │ 注入 Basic（机机密码）
         │                                    │        │ 注入 Basic（机机密码）
   静态面板 (public/，vite 产物：src/web/frontend 构建；git 不入库)                   ▼        ▼
                                     /api/* → api.js（鉴权 → 路由匹配 → ctx 拼装）
@@ -44,16 +45,18 @@ CLI（bin/nx-as.mjs → runtime/cli.js）与 HTTP 走**同一张 action 表**：
 3. **存储原子写** — store.json 走 tmp+rename；事务用 `mutateStore`（structuredClone 深拷贝，
    抛错不落盘）。直接 `fsp.writeFile(STORE_PATH)` 会在进程被杀时损坏数据。
    高频 append（审计）不走 store，走独立 JSONL（audit.jsonl）。
-4. **密钥在 api.js 层拦** — 别在各 action 里各自验 token。新加公开路径只能改 api.js 的
-   `PUBLIC_PATHS`。网关面 `/m/v1/*` 的 device token 鉴权在 gateway 中间件里，与 api.js 的
-   单用户密钥完全独立。
+4. **会话在 api.js 层拦** — 别在各 action 里各自验身份。新加公开路径只能改 api.js 的
+   `PUBLIC_PATHS`（当前：`/api/auth/verify` 探活、`/api/bootstrap` 端口协商签名）。
+   统一会话的签发/校验在 `runtime/session.js`（requireSession），api.js 与 gateway check.js
+   共用；OIDC 协议在 `runtime/oidc.js`。静态密钥与 device token 方案已废除，
+   machineSecret（nx-as↔pi-web 机机信任）与 SSO 正交、保留。
 
 ## 失败 vs 业务结果
 
 | 情形 | 表达 | 例子 |
 |---|---|---|
-| 调用方无从处理 | throw AppError(code) | prompt 名非法、设备不存在 |
-| 调用方要决策/分支 | return {status} | device.revoke 对已吊销设备 `{status:'already_revoked'}` |
+| 调用方无从处理 | throw AppError(code) | prompt 名非法、隧道不存在 |
+| 调用方要决策/分支 | return {status} | cli login 对重复登录直接覆盖 credentials 条目 |
 
 错误码 → HTTP 状态唯一映射（core/errors.js）：INVALID_INPUT 400 / UNAUTHORIZED 401 /
 NOT_FOUND 404 / CONFLICT+BLOCKED 409 / EXTERNAL 502 / INTERNAL 500。CLI `--json` 失败输出

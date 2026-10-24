@@ -13,7 +13,9 @@ services:
     environment:
       NX_AS_STORE: /data/store.json
       NXAS_DOMAIN: ${NXAS_DOMAIN:-nx-as.local}
-      NX_AS_TOKEN: ${NX_AS_TOKEN:-}   # 管理密钥；留空则首启自动生成（docker logs 查看）
+      NXAS_OIDC_ISSUER: ${NXAS_OIDC_ISSUER:-}       # go-ah 认证中心（如 http://47.110.80.47:8082）
+      NXAS_OIDC_CLIENT_ID: ${NXAS_OIDC_CLIENT_ID:-nx-as}
+      NXAS_OIDC_REDIRECT_URI: ${NXAS_OIDC_REDIRECT_URI:-}  # 公网部署的精确回调地址；留空=按 Host 动态构造
     restart: unless-stopped
     mem_limit: 700m
     logging:

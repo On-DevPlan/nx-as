@@ -2,34 +2,59 @@
 
 **nginx 配置文件管理器 + 鉴权网关基座**：一个自带专业控制面板的 nginx 运维工具——
 浏览/编辑/新建/停用/删除 nginx 配置文件，每次变更自动 `nginx -t` 校验（失败还原）+
-graceful reload + 滚动备份；在此之上是一层鉴权网关（device token / 管理密钥两级凭据、
+graceful reload + 滚动备份；在此之上是一层鉴权网关（**go-ah OIDC 单点登录**统一会话、
 限流、审计），把任意目标进程安全地放到公网后面。
 
 ```
 浏览器 ──► nx-as 控制面板（nginx 配置文件管理器 · 设备管理 · 证书 · 密钥）
               │
               ├─ nginx 配置管理：托管目录内 *.conf 全生命周期（-t 校验 / reload / 备份还原）
-              ├─ 鉴权网关：/m/v1/* 反代（device token + SSE 短票）/ nginx auth_request 委托
+              ├─ 鉴权网关：/m/v1/* 反代（SSO 会话 + SSE 短票）/ nginx auth_request 委托
               └─ Docker 基座：FROM nx-as-base 给任意应用套上「登录 + nginx 入口」
 ```
 
 包名/bin 仍为 `nx-as`；`nx-apiserver` 是它的语义名。CLI、Web 面板、管理 API 同一张 action 表。
 另有 **direct 模式**（默认，`NXAS_GW_MODE` 未设）：不经 nginx，nx-as 进程内反代，一条命令本机全通。
 
-## 快速开始
+## 快速开始（3 步完成内网穿透）
 
 ```bash
-# 本地（direct 模式，无需 nginx）
-pnpm install && pnpm build
-nx-as serve --with-web           # 网关 :7801 + pi-web :30141 一起拉起
+# ① 服务器上部署 gost-as 容器（完整 compose 见 docs/gost-as.md；三个 OIDC env 必填）
+#    NXAS_OIDC_ISSUER=http://<go-ah>  NXAS_OIDC_CLIENT_ID=nx-as  NXAS_OIDC_ALLOWED_EMAILS=<你的邮箱>
+docker compose -f docker-compose.gost-as.yml up -d        # 面板 http://服务器:8090
+#    验证：浏览器打开 http://服务器:8090 → 应跳 go-ah 登录页，登录后进面板即部署成功
 
-# 服务器（nginx 拓扑，见下「部署」）
-export NX_AS_TOKEN=管理密钥
+# ② 注册 OIDC client（一次性；go-ah 管理员账号）并验证
+nx-as oidc register --username <管理员> --issuer http://<go-ah>   # 密码交互输入
+nx-as oidc probe                                                  # 四段全过 = 配置就绪
+
+# ③ 本机穿透一条龙（首次自动弹浏览器完成 go-ah 登录 → 注册隧道 → 拉起常驻 gost）
+nx-as tunnel add sqlh 7877 --server http://服务器:8090/_nxas
+# ✓ 输出：本地 :7877 → 公网 :7877；浏览器打开 http://服务器:7877 即用（跳 go-ah 登录）
 ```
 
-面板默认打开 **nginx** 页；控制台链接（`/?token=<密钥>`）在 serve 启动时打印。
+日常只有三条命令：`tunnel add`（加）/ `tunnel list`（看）/ `tunnel remove`（删）。
+本机调试面板（direct 模式）与更多用法见下方各节。
 
 ## nginx 配置文件管理
+
+### 看板（面板主页，UI 表单 ↔ 配置文件）
+
+面板 nginx 页的主体是一张**看板**：托管目录里每个 `*.conf` 一行——类型（站点/端口/网关/自定义）、
+入口（域名或端口）、上游、特性徽标（TLS/WS/鉴权/表单）、启用状态与操作。两种「从 UI 生成配置文件」
+的表单，保存即走同一条 **备份 → `nginx -t`（失败还原）→ graceful reload** 管线：
+
+| 表单 | 生成 | 配置文件 |
+|---|---|---|
+| **添加反代站点** | 域名（多个）→ 上游，可选 WebSocket 升级、TLS（证书/私钥路径） | `nxas-site.<域名slug>.conf`（`server_name …` + `proxy_pass …`） |
+| **添加端口转发** | 监听端口 → 上游（特殊端口反代），可选 TLS/WS | `nxas-port.<端口>.conf`（`listen <端口>` + `proxy_pass …`） |
+
+- 表单生成的文件带 `# nxas-spec <json>` 头：看板「编辑」从 spec 回填表单，保存整体重渲染该文件；
+  保存前有**实时预览**（400ms 防抖，直接渲染将要落盘的配置文本 + 即时校验报错）
+- 没有 spec 头的文件（手写/历史配置）同样进看板：解析 server 块推断字段，只读展示，
+  「配置」按钮跳原始编辑器；停用/删除/备份还原与文件管理器共用一套能力
+- CLI 等价：`nginx hosts`（看板清单）/ `nginx host apply [--spec '<json>' | 拆开 flag]`（增改，
+  `--preview` 只渲染不落盘）/ `nginx host remove <名>`（删除）
 
 ### 多文件管理器（宿主机模式）
 
@@ -91,11 +116,13 @@ SSE 用 EventSource 时不能带 header：先 `POST /m/v1/sessions/:id/ticket`�
 |---|---|
 | `nx-as serve [--port 7801] [--host] [--no-open] [--with-web] [--web-port]` | 起网关 + 面板；`--with-web` 同时拉起 pi-web 并注入随机 `PI_WEB_PASSWORD`；端口被占时见下方「端口占用」 |
 | `nx-as web [--port 30141]` | 只拉起 pi-web（安全启动器，本机调试用） |
-| `nx-as nginx files / file get\|put\|delete\|toggle\|backups\|restore` | **配置文件管理器**（见上节） |
+| `nx-as nginx hosts / host apply / host remove` | **看板**（见上节）：清单 / 表单增改（`--spec` JSON 或拆开 flag，`--preview` 只渲染）/ 删除 |
+| `nx-as nginx files / file get\|put\|delete\|toggle\|backups\|restore` | **配置文件管理器**（原始编辑兜底，见上节） |
 | `nx-as nginx status` / `config [--preview]` / `apply` / `rollback` / `setup` / `rotate-secret` | 托管状态（版本/目录写权/漂移/sudoers）/引导配置/回滚/部署引导/轮换机机密码 |
-| `nx-as device issue --name <设备名>` | 签发 device token（线下交付；面板可查看与吊销） |
-| `nx-as device list` / `device revoke <id>` | 设备清单 / 吊销（下一次请求即 401） |
-| `nx-as auth status/rotate` | 管理密钥 |
+| `nx-as login [--server <url>]` / `logout` | 浏览器 SSO 登录（会话 token 落 credentials.json）/ 清除本地凭据 |
+| `nx-as auth status` / `auth me` | SSO 接入状态 / 当前登录身份 |
+| `nx-as auth rotate` | 轮换会话签名密钥（= 全端下线） |
+| `nx-as oidc config set / probe / register` | OIDC 配置 / 零凭据探测 / 注册 client |
 | `nx-as health` / `bootstrap --json` / `routes` / `help [主题]` | 排查与自省 |
 | `nx-as skill install` / `skill get` | 给 agent 装/导出使用文档 |
 
@@ -105,8 +132,7 @@ SSE 用 EventSource 时不能带 header：先 `POST /m/v1/sessions/:id/ticket`�
 
 `serve` 启动时端口已被占用，会先探一下占用者是谁：
 
-- 占用者就是**本面板**（另一个 `nx-as serve`）→ 不重复启动，直接打开浏览器指向它，
-  并打印带密钥的控制台链接（`/?token=<密钥>`）；
+- 占用者就是**本面板**（另一个 `nx-as serve`）→ 不重复启动，直接打开浏览器指向它；
 - 占用者是别的服务 → 顺延到**下一个空闲端口**起自己的面板，并打开浏览器指向新面板。
 
 两种情况都会自动开浏览器。用 `--no-open`（只影响这一次）或环境变量
@@ -114,18 +140,19 @@ SSE 用 EventSource 时不能带 header：先 `POST /m/v1/sessions/:id/ticket`�
 
 ## 安全模型
 
-三级凭据，互不相通：
+**人的凭据唯一来源是 go-ah 认证中心的 OIDC 单点登录**（issuer 如 `http://47.110.80.47:8082`，
+public client + PKCE，refresh_token 不落地）；旧「单用户静态密钥 + device token」方案已废除。
 
 | 面 | 凭据 | 特性 |
 |---|---|---|
-| 管理面 `/api/*`（本机面板/CLI） | 单用户密钥 | `NX_AS_TOKEN` 或自动生成；timing-safe 比较 |
-| 网关 `/_nxas/m/v1/*`（手机/外部设备） | per-device token | 可单独吊销、last_used 可审计、登录可吊销 |
-| 上游（pi-web 回环） | 机机 Basic | serve 启动随机生成，不落盘不打印 |
+| 人的访问（面板 / 网关 / 手机 / CLI） | go-ah SSO → nx-as 统一会话 | `nxas_s2` HMAC 会话 7 天；浏览器 cookie 与 CLI Bearer 同一凭据；`auth rotate` 全端下线 |
+| 上游（pi-web 回环） | 机机 Basic | serve 启动随机生成，与 SSO 正交，不落公网 |
 
-机制：timing-safe 比较（管理密钥与 device token 同口径）、认证失败指数退避（1s→60s，
-5 分钟静默清零，**登录接口与网关共用同一节流桶**）、同源 Origin 校验（`Sec-Fetch-Site` +
-Origin↔Host 同源判定——面板挂在任意域名下同源写操作不再误杀，跨站照拦）、HTTPS 反代下
-会话 cookie 自动加 `Secure`、全量审计落 `~/.nx-as/audit.jsonl`（含登录成败、nginx 文件变更）。
+机制：state+PKCE（授权跳转防 CSRF/拦截，state 装签名短时 cookie）、认证失败指数退避
+（1s→60s，5 分钟静默清零，**登录与网关共用同一节流桶**）、同源 Origin 校验
+（`Sec-Fetch-Site` + Origin↔Host 同源判定）、HTTPS 反代下会话 cookie 自动加 `Secure`、
+email 白名单（`store.oidc.allowedEmails`，空=放行全部 go-ah 用户）、全量审计落
+`~/.nx-as/audit.jsonl`（oidc.login / gw.proxy / nginx 文件变更）。
 
 **部署红线**：主进程（pi-web）只听 127.0.0.1，绝不暴露公网（其终端/bash 等于 RCE）；
 nginx 模式下公网流量全部经 nginx 直代，nx-as 只接 loopback。
@@ -181,10 +208,10 @@ nx-as nginx apply --domain agent.example.com \
   --key-path  /etc/letsencrypt/live/agent.example.com/privkey.pem
 
 # 4. 常驻（nginx 模式：数据路径归 nginx，nx-as 只做鉴权/签发/面板）
-NXAS_GW_MODE=nginx NX_AS_TOKEN=管理密钥 nx-as serve --with-web --no-open
+NXAS_GW_MODE=nginx NXAS_OIDC_ISSUER=http://47.110.80.47:8082 NXAS_OIDC_CLIENT_ID=nx-as nx-as serve --with-web --no-open
 ```
 
-之后 nginx 配置变更全部在**面板「nginx」页**完成（多文件管理器 + 引导表单 + 备份还原）。
+之后 nginx 配置变更全部在**面板「nginx」页**完成（站点/端口看板 + 网关入口表单 + 原始文件管理器 + 备份还原）。
 
 **direct 模式**（默认；Windows/本机开发/无 nginx）：`nx-as serve --with-web` 即可，
 进程内反代 `/m/v1/*`，鉴权行为与 nginx 模式完全一致（同一套决策逻辑 `gateway/check.js`）。
@@ -201,13 +228,16 @@ NXAS_GW_MODE=nginx NX_AS_TOKEN=管理密钥 nx-as serve --with-web --no-open
 
 ```
 ~/.nx-as/
-  store.json          设置/管理密钥/设备 token hash/nginx 托管配置（原子写）
-  audit.jsonl         审计（append-only：网关、登录、nginx 文件变更）
+  store.json          OIDC 接入配置/会话签名密钥/机机密码/nginx 托管配置（原子写）
+  credentials.json    CLI 会话 token（nx-as login 落盘，0600；7 天）
+  client.json         本地 client 连接配置（server/relay/隧道清单）
+  audit.jsonl         审计（append-only：SSO 登录、网关、nginx 文件变更）
   nginx-backups/      配置文件管理器的滚动备份（<文件名>/<时间戳>.conf，每文件 10 份）
   pi-agent/           pi 的 agent dir（会话 JSONL/extensions/models.json，与 ~/.pi 隔离）
 ```
 
-测试/多实例用 `NX_AS_STORE` 环境变量重定向；管理密钥可用 `NX_AS_TOKEN` 注入。
+测试/多实例用 `NX_AS_STORE` 环境变量重定向；SSO 配置可用 env
+`NXAS_OIDC_ISSUER/CLIENT_ID/REDIRECT_URI` 覆盖（容器部署用）。
 
 ## 开发
 

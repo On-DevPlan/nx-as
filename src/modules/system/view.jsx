@@ -62,7 +62,7 @@ export default function SystemView() {
           <span>时间</span><span>动作</span><span>详情</span>
         </div>
         {entries !== null && filtered.length === 0 && (
-          <Row label=""><span className="mid">{entries.length ? '（无匹配条目）' : '（审计为空）'}</span></Row>
+          <Row label=""><span className="mid">{entries.length ? '（无匹配条目）' : '暂无记录——登录 / 隧道 / nginx 变更都会落审计'}</span></Row>
         )}
         {filtered.map((e, i) => {
           const d = detailText(e);

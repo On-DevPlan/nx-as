@@ -1,4 +1,4 @@
-// cert 模块单测：
+// 证书单测（已并入 nginx 模块：src/modules/nginx/cert.js）：
 //  - 静态 PEM fixture（tests/fixtures/test-cert.pem + test-key.pem / wrong-key.pem）
 //    —— 不依赖 openssl CLI（CI 的 ubuntu-24.04 runner 不自带 openssl，spawnSync ENOENT 曾拦死发版）
 //  - parseCert/parseKey 拒绝乱码、validatePair / importCert / removeCert / downloadPem / certStatus
@@ -17,7 +17,7 @@ const dir = await mkdtemp(join(tmpdir(), 'cert-unit-'));
 process.env.NXAS_SSL_DIR = dir;
 process.env.NX_AS_HOME = join(ROOT, '.tool', 'test-store', 'cert.json');
 
-const svc = await imp('src/modules/cert/service.js');
+const svc = await imp('src/modules/nginx/cert.js');
 const { mutateStore, resetStoreCache } = await imp('src/core/store.js');
 
 // ---------- 静态 fixture（签发时 CN=nx-as.test.local，36500 天） ----------

@@ -220,7 +220,14 @@ export async function readConfigFile(name) {
     if (e.code === 'ENOENT') throw notFound(`文件不存在: ${name}`);
     throw e;
   }
-  if (real !== abs) throw badInput(`${name} 是符号链接，拒绝读取`);
+  // 符号链接双检：末段 lstat（跨平台可靠）+ POSIX 上 realpath 归一比对（父目录链上的链接逃逸）。
+  // win32 的 realpath 会展开 8.3 短名（MINISF~1 → MINISFORUM），字符串比对必假阳性——
+  // Windows 仅开发态（nginx 管理本身仅支持 Linux），末段 lstat 足够
+  const st0 = await fsp.lstat(abs);
+  if (st0.isSymbolicLink()) throw badInput(`${name} 是符号链接，拒绝读取`);
+  if (process.platform !== 'win32' && real !== abs) {
+    throw badInput(`${name} 是符号链接，拒绝读取`);
+  }
   const content = await fsp.readFile(abs, 'utf8');
   return { name, content };
 }

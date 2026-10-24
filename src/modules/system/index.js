@@ -1,4 +1,4 @@
-import { bootstrap, bootstrapCli, health, routesQuery, auditList } from './service.js';
+import { bootstrap, bootstrapCli, health, auditList } from './service.js';
 
 const actions = [
   {
@@ -24,18 +24,6 @@ const actions = [
     render: (h) => `ok=${h.ok}  version=${h.version}  store=${h.storeReachable}`,
   },
   {
-    id: 'system.routes',
-    cli: ['routes'],
-    http: ['GET', '/api/routes'],
-    summary: '全量命令-路由对照（--http "METHOD /path" 反查命令）',
-    flags: { http: { type: 'string' } },
-    run: (ctx) => routesQuery(ctx),
-    render: (list) =>
-      (list || [])
-        .map((e) => `${e.command.padEnd(46)} ${e.http ? e.http.padEnd(36) : ''} ${e.summary}`)
-        .join('\n') || '(无匹配路由；用 --http "METHOD /path" 反查)',
-  },
-  {
     id: 'system.audit',
     cli: ['audit'],
     http: ['GET', '/api/audit'],
@@ -45,8 +33,8 @@ const actions = [
     render: (r) =>
       r.entries
         .map((e) => `${new Date(e.ts).toLocaleString().padEnd(22)}  ${String(e.action || '?').padEnd(20)}  ${e.detail ? JSON.stringify(e.detail) : ''}`)
-        .join('\n') || '(审计为空)',
+        .join('\n') || '(暂无记录——登录 / 隧道 / nginx 变更都会落审计)',
   },
 ];
 
-export default { id: 'system', view: false, actions };
+export default { id: 'system', view: true, actions };

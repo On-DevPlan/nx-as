@@ -64,25 +64,28 @@ test('store: 首次读取返回空结构；原子写后能读回', async () => {
   resetStoreCache();
   const s = await loadStore();
   assert.equal(s.version, 1);
-  assert.deepEqual(s.devices, []);
+  assert.deepEqual(s.oidc.allowedEmails, []);
+  assert.deepEqual(s.machineSecret, '');
   await mutateStore((d) => {
-    d.devices.push({ id: 'dev1', tokenHash: 'x', name: 'phone', createdAt: 1 });
+    d.oidc.allowedEmails.push('a@b.c');
+    d.machineSecret = 'm1';
   });
   resetStoreCache();
   const s2 = await loadStore();
-  assert.equal(s2.devices.length, 1);
+  assert.deepEqual(s2.oidc.allowedEmails, ['a@b.c']);
+  assert.equal(s2.machineSecret, 'm1');
 });
 
 test('store: 事务抛错不落盘（structuredClone 隔离）', async () => {
   resetStoreCache();
-  const before = (await loadStore()).devices.length;
+  const before = (await loadStore()).machineSecret;
   await assert.rejects(
     mutateStore(() => {
       throw new Error('boom');
     }),
   );
   resetStoreCache();
-  assert.equal((await loadStore()).devices.length, before);
+  assert.equal((await loadStore()).machineSecret, before);
 });
 test('store: 不同路径的缓存互不串（缓存身份含路径）', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'store-path-'));
@@ -96,16 +99,16 @@ test('store: 不同路径的缓存互不串（缓存身份含路径）', async (
   assert.equal((await loadStore(a)).machineSecret, 'AAA', '再读 A 仍正确');
 });
 
-test('store: 损坏/不可读必须抛错，不得静默当空（防密钥与设备清单被重置）', async () => {
+test('store: 损坏/不可读必须抛错，不得静默当空（防密钥与配置被重置）', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'store-corrupt-'));
   const bad = join(dir, 'bad.json');
   await writeFile(bad, '{ corrupted json !!!', 'utf8');
-  // 旧行为：任何读取异常都返回空结构 → ensureToken/mutateStore 会把密钥与设备「重置」
+  // 旧行为：任何读取异常都返回空结构 → mutateStore 会把配置「重置」
   // 新行为：只有 ENOENT（首次运行）走空结构，其余一律抛错
   await assert.rejects(() => loadStore(bad), (e) => e.code === 'INTERNAL' && /store 读取失败/.test(e.message));
   // ENOENT 仍然返回空结构（首次运行语义不变）
   const fresh = await loadStore(join(dir, 'missing.json'));
-  assert.deepEqual(fresh.devices, []);
+  assert.deepEqual(fresh.oidc.allowedEmails, []);
 });
 
 // ---------- audit ----------
