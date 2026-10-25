@@ -1,6 +1,6 @@
 {
   "name": "nx-as",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "nx-apiserver — nginx config file manager & auth gateway base (nginx + nx-as); managed conf.d files with nginx -t validation, backups and reload",
   "type": "module",
   "bin": {
